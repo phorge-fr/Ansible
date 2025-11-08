@@ -1,0 +1,10 @@
+---
+- name: Update the apt package index
+  ansible.builtin.apt:
+    update_cache: true
+
+- name: Upgrade all packages to the latest version
+  ansible.builtin.apt:
+    upgrade: full
+    autoremove: true
+    autoclean: true

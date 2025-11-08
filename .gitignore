@@ -1,0 +1,4 @@
+.ansible/
+.vscode/
+collections/
+roles/geerlingguy.node_exporter/

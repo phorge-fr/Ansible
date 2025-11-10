@@ -1,0 +1,81 @@
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: yes
+
+- name: Install NVIDIA packages
+  when: gpu_brand is defined and 'nvidia' in gpu_brand
+  ansible.builtin.apt:
+    name:
+      - linux-headers-{{ ansible_kernel }}
+      - build-essential
+      - dkms
+      - nvidia-detect
+      - nvidia-driver
+      - nvidia-kernel-dkms
+      - nvtop
+    state: present
+    update_cache: yes
+
+- name: Install NVIDIA packages
+  when: gpu_brand is defined and 'nvidia' in gpu_brand
+  ansible.builtin.apt:
+    name:
+      - build-essential 
+      - dkms 
+      - module-assistant
+      - git-core
+      - libssl-dev
+      - cmake
+      - autoconf
+      - automake
+      - gnupg
+      - wget
+    state: present
+    update_cache: yes
+
+- name: Create directory for ROCm keyrings
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+  become: true
+  when: gpu_brand is defined and 'amd' in gpu_brand
+
+- name: Convert ROCm GPG key to keyring
+  ansible.builtin.shell: |
+    wget https://repo.radeon.com/rocm/rocm.gpg.key -O - | gpg --dearmor | sudo tee /etc/apt/keyrings/rocm.gpg > /dev/null
+  become: true
+  when: gpu_brand is defined and 'amd' in gpu_brand
+  register: gpg_output
+
+- name: Add AMDGPU repository
+  ansible.builtin.apt_repository:
+    repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/7.1 noble main"
+    filename: amdgpu
+  become: true
+  when: gpu_brand is defined and 'amd' in gpu_brand
+
+- name: Add ROCm pin priority
+  ansible.builtin.copy:
+    dest: /etc/apt/preferences.d/rocm-pin-600
+    content: |
+      Package: *
+      Pin: release o=repo.radeon.com
+      Pin-Priority: 600
+  become: true
+  when: gpu_brand is defined and 'amd' in gpu_brand
+
+- name: Update package cache
+  ansible.builtin.apt:
+    update_cache: yes
+  become: true
+  when: gpu_brand is defined and 'amd' in gpu_brand
+
+- name: Install NVIDIA packages
+  when: gpu_brand is defined and 'nvidia' in gpu_brand
+  ansible.builtin.apt:
+    name:
+      - rocm
+      - nvtop
+    state: present
+    update_cache: yes

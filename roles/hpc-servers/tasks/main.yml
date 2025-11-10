@@ -1,0 +1,4 @@
+---
+- ansible.builtin.import_tasks: install-deps.yml
+- ansible.builtin.import_tasks: install-docker.yml
+- ansible.builtin.import_tasks: install-nct.yml

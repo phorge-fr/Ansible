@@ -13,3 +13,6 @@ mighty-deer.phorge
 brave-whale.phorge
 mighty-rabbit.phorge
 clever-panda.phorge
+
+[hpc]
+hpc0.phorge gpu_brand=['nvidia','amd']

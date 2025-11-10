@@ -1,0 +1,43 @@
+---
+- name: Add NVIDIA GPG key
+  when: gpu_brand is defined and 'nvidia' in gpu_brand
+  ansible.builtin.shell: >
+    curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey
+    | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+  args:
+    creates: /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+
+- name: Add NVIDIA Container Toolkit repository
+  when: gpu_brand is defined and 'nvidia' in gpu_brand
+  ansible.builtin.shell: |
+    curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+    | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+    | tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+  args:
+    creates: /etc/apt/sources.list.d/nvidia-container-toolkit.list
+
+- name: Update package cache
+  when: gpu_brand is defined and 'nvidia' in gpu_brand
+  ansible.builtin.apt:
+    update_cache: yes
+
+- name: Install NVIDIA Container Toolkit packages
+  when: gpu_brand is defined and 'nvidia' in gpu_brand
+  ansible.builtin.apt:
+    name:
+      - "nvidia-container-toolkit={{ nvidia_container_toolkit_version }}"
+      - "nvidia-container-toolkit-base={{ nvidia_container_toolkit_version }}"
+      - "libnvidia-container-tools={{ nvidia_container_toolkit_version }}"
+      - "libnvidia-container1={{ nvidia_container_toolkit_version }}"
+    state: present
+
+- name: Configure Docker to use NVIDIA Container Runtime as default
+  when: gpu_brand is defined and 'nvidia' in gpu_brand
+  ansible.builtin.shell: |
+    nvidia-ctk runtime configure --runtime=docker
+
+- name: Restart Docker to apply NVIDIA Container Runtime configuration
+  when: gpu_brand is defined and 'nvidia' in gpu_brand
+  ansible.builtin.systemd:
+    name: docker
+    state: restarted

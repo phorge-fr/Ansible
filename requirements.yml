@@ -1,2 +1,5 @@
 roles:
   - name: geerlingguy.node_exporter
+
+collections:
+  - name: community.docker

@@ -13,7 +13,7 @@ requirements:
 1. Install the requirements
 
 ```bash
-ansible-galaxy role install -r requirements.yml
+ansible-galaxy install -r requirements.yml
 ```
 
 2. Test environment

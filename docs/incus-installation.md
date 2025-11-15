@@ -166,6 +166,7 @@ incus config set core.metrics_address="10.1.0.x:8444"
 incus config set core.bgp_address="10.1.0.x"
 incus config set core.bgp_asn="65535"
 incus config set core.bgp_routerid="10.1.0.x"
+incus config set core.storage_buckets_address 10.1.0.x:8555
 # Replace x by the last IP bit for each machine
 ```
 
@@ -218,6 +219,7 @@ microceph cluster join <token> # Repeate on each nodes with more than 1 disk
 [Each Anvil nodes]
 ```bash
 microceph disk add /dev/nvme0n1 --wipe
+microceph enable rgw # Enables S3 storage
 ```
 
 7. Verify disks
@@ -260,6 +262,13 @@ incus storage create test ceph --target <node> # Repeat for each node in the clu
 incus storage create test ceph
 ```
 
+10. Create **Incus** bucket storage pool
+
+[Anvil bootstrap node]
+```bash
+incus storage create s3-pool cephobject --target <node> # Repeat for each node in the cluster
+incus storage create s3-pool cephobject cephobject.radosgw.endpoint=localhost:8080
+```
 
 ### Setup OVN
 

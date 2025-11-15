@@ -310,15 +310,18 @@ Don't forget to modify `external_ids:ovn-encap-ip=` with the IP of the current n
 
 [Bootstrap node]
 ```bash
-incus network create UPLINK --type=physical parent=<parent interface> --target=<node name> # Repeat for each node in the clyster
+incus network create UPLINK --type=physical parent=<parent interface> --target=<node name> # Repeat for each node in the cluster
 incus network create UPLINK --type=physical \
+   mut=8152 \
    bgp.peers.core-gw.address=10.1.0.254 \
    bgp.peers.core-gw.asn="65535" \
-   ipv4.routes: 10.3.0.0/24 \ # Used for LoadBalancers & Forwards
+   ipv4.routes=10.3.0.0/24 \
    ipv4.ovn.ranges=10.2.0.10-10.2.0.20 \
    ipv4.gateway=10.2.0.254/24 \
    dns.nameservers=10.2.0.254
 ```
+
+P.S. `ipv4.routes` is used to define which CIDR is routed to each hosts for LoadBalancers & Forwards
 
 ## Notes
 

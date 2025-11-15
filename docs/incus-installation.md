@@ -219,7 +219,7 @@ microceph cluster join <token> # Repeate on each nodes with more than 1 disk
 [Each Anvil nodes]
 ```bash
 microceph disk add /dev/nvme0n1 --wipe
-microceph enable rgw # Enables S3 storage
+microceph enable rgw # (Optional) Enables S3 storage
 ```
 
 7. Verify disks
@@ -262,7 +262,7 @@ incus storage create test ceph --target <node> # Repeat for each node in the clu
 incus storage create test ceph
 ```
 
-10. Create **Incus** bucket storage pool
+10. (Optional) Create **Incus** bucket storage pool
 
 [Anvil bootstrap node]
 ```bash

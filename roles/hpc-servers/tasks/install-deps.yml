@@ -2,22 +2,7 @@
   ansible.builtin.apt:
     update_cache: yes
 
-- name: Install NVIDIA packages
-  when: gpu_brand is defined and 'nvidia' in gpu_brand
-  ansible.builtin.apt:
-    name:
-      - linux-headers-{{ ansible_kernel }}
-      - build-essential
-      - dkms
-      - nvidia-detect
-      - nvidia-driver
-      - nvidia-kernel-dkms
-      - nvtop
-    state: present
-    update_cache: yes
-
-- name: Install NVIDIA packages
-  when: gpu_brand is defined and 'nvidia' in gpu_brand
+- name: Install required packages
   ansible.builtin.apt:
     name:
       - build-essential 
@@ -30,8 +15,30 @@
       - automake
       - gnupg
       - wget
+      - nvtop
     state: present
     update_cache: yes
+
+- name: Run nvidia-detector
+  ansible.builtin.command:
+    cmd: nvidia-detector
+  register: nvidia_detector
+  changed_when: false
+  failed_when: false
+  become: true
+  when: gpu_brand is defined and 'nvidia' in gpu_brand
+
+- name: Install NVIDIA driver
+  ansible.builtin.apt:
+    name: "{{ nvidia_detector.stdout_lines }}"
+    state: present
+    update_cache: yes
+  become: true
+  when:
+    - gpu_brand is defined
+    - "'nvidia' in gpu_brand"
+    - nvidia_detector is defined
+    - nvidia_detector.stdout | length > 0
 
 - name: Create directory for ROCm keyrings
   ansible.builtin.file:
@@ -69,13 +76,11 @@
   ansible.builtin.apt:
     update_cache: yes
   become: true
-  when: gpu_brand is defined and 'amd' in gpu_brand
 
-- name: Install NVIDIA packages
-  when: gpu_brand is defined and 'nvidia' in gpu_brand
+- name: Install ROCm packages
+  when: gpu_brand is defined and 'amd' in gpu_brand
   ansible.builtin.apt:
     name:
       - rocm
-      - nvtop
     state: present
     update_cache: yes

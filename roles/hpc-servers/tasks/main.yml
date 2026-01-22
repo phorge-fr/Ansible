@@ -3,3 +3,4 @@
  - ansible.builtin.import_tasks: install-docker.yml
  - ansible.builtin.import_tasks: install-nct.yml
  - ansible.builtin.import_tasks: install-monitoring.yml
+ - ansible.builtin.import_tasks: install-smolinfer.yml

@@ -1,0 +1,36 @@
+model_list:
+  - model_name: gemma3-4b
+    litellm_params:
+      model: hosted_vllm/gemma3-4b-it
+      api_base: http://gemma3-4b-it:8000/v1
+      api_key: dummy
+    model_info:
+      background_health_checks: true
+      health_check_interval: 60
+
+  - model_name: qwen3-4b
+    litellm_params:
+      model: hosted_vllm/qwen3-4b
+      api_base: http://qwen3-4b:8000/v1
+      api_key: dummy
+    model_info:
+      background_health_checks: true
+      health_check_interval: 60
+
+  - model_name: mistral-7b
+    litellm_params:
+      model: hosted_vllm/mistral-7b
+      api_base: http://mistral-7b:8000/v1
+      api_key: dummy
+    model_info:
+      background_health_checks: true
+      health_check_interval: 60
+
+
+litellm_settings:
+  drop_params: True
+  callbacks: ["prometheus"]
+
+general_settings:
+  background_health_checks: true
+  health_check_interval: 60

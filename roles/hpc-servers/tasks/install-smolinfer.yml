@@ -1,0 +1,25 @@
+- name: Create directory for smolinfer
+  file:
+    path: /opt/smolinfer/
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Copy files for smolinfer
+  copy:
+    src: smolinfer/
+    dest: /opt/smolinfer/
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Create external Docker network for smolinfer
+  community.docker.docker_network:
+    name: smolinfer
+    state: present
+
+- name: Launch smolinfer with Docker Compose
+  community.docker.docker_compose_v2:
+    project_src: /opt/smolinfer
+    state: present

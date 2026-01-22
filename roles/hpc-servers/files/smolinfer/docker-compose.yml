@@ -1,0 +1,180 @@
+networks:
+  gen_ai:
+    driver: bridge
+  gateway:
+    driver: bridge
+  monitoring:
+    external: true
+    name: monitoring
+    
+services:
+  gemma3-4b-it:
+    image: ghcr.io/ggml-org/llama.cpp:server-rocm
+    container_name: gemma3-4b-it
+    labels:
+      app: llm_model
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+    volumes:
+      - ./models:/root/.cache/llama.cpp/
+    command: >
+      -hf ggml-org/gemma-3-4b-it-GGUF
+      --host 0.0.0.0
+      --port "8000"
+      --metrics
+      -c "16384" -np "4"
+      -ub 256
+      --cache-type-k q4_0
+      --cache-type-v q4_0
+      --no-kv-offload
+      --no-webui
+      --split-mode none
+      --no-mmap
+      --swa-full
+      --slots
+      --cache-ram 1024
+      --cache-reuse 256
+
+    restart: unless-stopped
+    networks:
+      - gen_ai
+      - monitoring
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/models"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 80s
+
+  qwen3-4b:
+    image: ghcr.io/ggml-org/llama.cpp:server-rocm
+    container_name: qwen3-4b
+    labels:
+      app: llm_model
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+    volumes:
+      - ./models:/root/.cache/llama.cpp/
+    command: >
+      -hf unsloth/Qwen3-4B-Instruct-2507-GGUF:Q4_K_M
+      --host 0.0.0.0
+      --port "8000"
+      --metrics
+      -c "16384" -np "4"
+      -ub 256
+      --cache-type-k q4_0
+      --cache-type-v q4_0
+      --no-kv-offload
+      --no-webui
+      --split-mode none
+      --no-mmap
+      --swa-full
+      --slots
+      --cache-ram 1024
+      --cache-reuse 256
+
+    restart: unless-stopped
+    networks:
+      - gen_ai
+      - monitoring
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/models"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 80s
+
+  mistral-7b:
+    image: ghcr.io/ggml-org/llama.cpp:server-rocm
+    container_name: mistral-7b
+    labels:
+      app: llm_model
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+    volumes:
+      - ./models:/root/.cache/llama.cpp/
+    command: >
+      -hf lmstudio-community/Mistral-7B-Instruct-v0.3-GGUF:Q4_K_M
+      --host 0.0.0.0
+      --port "8000"
+      --metrics
+      -c "32768" -np "4"
+      -ub 256
+      --cache-type-k q4_0
+      --cache-type-v q4_0
+      --no-kv-offload
+      --no-webui
+      --split-mode none
+      --no-mmap
+      --swa-full
+      --slots
+      --cache-ram 1024
+      --cache-reuse 256
+
+    restart: unless-stopped
+    networks:
+      - gen_ai
+      - monitoring
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/models"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 80s
+
+  litellm:
+    container_name: litellm
+    restart: unless-stopped
+    image: ghcr.io/berriai/litellm:main-stable
+    ports:
+      - "4000:4000"
+    command:
+      - "--config=/litellm-config.yml"
+    volumes:
+      - ./litellm-config.yml:/litellm-config.yml
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      gemma3-4b-it:
+        condition: service_healthy
+      qwen3-4b:
+        condition: service_healthy
+      mistral-7b:
+        condition: service_healthy
+    networks:
+      - gen_ai
+      - gateway
+      - monitoring
+    healthcheck:
+      test: [ "CMD-SHELL", "wget --no-verbose --tries=1 http://localhost:4000/health/liveliness || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  db:
+    container_name: litellm_db
+    restart: unless-stopped
+    image: postgres:16
+    env_file:
+      - .env
+    volumes:
+      - ./postgres:/var/lib/postgresql/data
+    networks:
+      - gateway
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
+      interval: 1s
+      timeout: 5s
+      retries: 10

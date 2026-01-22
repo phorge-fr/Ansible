@@ -17,3 +17,7 @@ scrape_configs:
     static_configs:
       - targets:
           - 'litellm:4000'
+  - job_name: 'node_exporter'
+    static_configs:
+      - targets: 
+          - 'host.docker.internal:9100'

@@ -30,6 +30,7 @@
       - "libnvidia-container-tools={{ nvidia_container_toolkit_version }}"
       - "libnvidia-container1={{ nvidia_container_toolkit_version }}"
     state: present
+  register: nvidia_packages_install
 
 - name: Configure Docker to use NVIDIA Container Runtime as default
   when: gpu_brand is defined and 'nvidia' in gpu_brand
@@ -37,7 +38,7 @@
     nvidia-ctk runtime configure --runtime=docker
 
 - name: Restart Docker to apply NVIDIA Container Runtime configuration
-  when: gpu_brand is defined and 'nvidia' in gpu_brand
+  when: gpu_brand is defined and 'nvidia' in gpu_brand and nvidia_packages_install.changed
   ansible.builtin.systemd:
     name: docker
     state: restarted

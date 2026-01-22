@@ -1,31 +1,25 @@
-- name: Clone Prometheus GPU Exporter repository
-  ansible.builtin.git:
-    repo: 'https://github.com/phorge-fr/prometheus_exporter_gpu.git'
-    dest: /opt/prometheus_exporter_gpu
-    update: yes
-
-- name: Launch Prometheus GPU exporter with Docker Compose
-  community.docker.docker_compose_v2:
-    project_src: /opt/prometheus_exporter_gpu
-    state: present
-
-- name: Create directory for cAdvisor
+- name: Create directory for monitoring
   file:
-    path: /opt/cadvisor
+    path: /opt/monitoring/
     state: directory
     owner: root
     group: root
     mode: '0755'
 
-- name: Copy docker-compose.yml for cAdvisor
+- name: Copy files for monitoring
   copy:
-    src: cadvisor-docker-compose.yml
-    dest: /opt/cadvisor/docker-compose.yml
+    src: monitoring/
+    dest: /opt/monitoring/
     owner: root
     group: root
     mode: '0644'
 
-- name: Launch cAdvisor with Docker Compose
+- name: Create external Docker network for monitoring
+  community.docker.docker_network:
+    name: monitoring
+    state: present
+
+- name: Launch monitoring with Docker Compose
   community.docker.docker_compose_v2:
-    project_src: /opt/cadvisor
+    project_src: /opt/monitoring
     state: present

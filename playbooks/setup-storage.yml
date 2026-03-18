@@ -1,0 +1,6 @@
+---
+- name: Storage Management - Setup and Configure Storage
+  hosts: storage
+  become: true
+  roles:
+    - storage-servers

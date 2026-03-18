@@ -1,0 +1,74 @@
+- name: Check if RAID device exists
+  ansible.builtin.stat:
+    path: "{{ md_device }}"
+  register: md_stat
+
+- name: Check if mount point is already mounted
+  ansible.builtin.command: mountpoint -q {{ mount_point }}
+  register: mount_check
+  failed_when: false
+  changed_when: false
+
+- name: Wipe disks
+  ansible.builtin.command: "wipefs -a {{ item }}"
+  loop: "{{ disks }}"
+  ignore_errors: true
+  when: not md_stat.stat.exists
+
+- name: Create RAID array with mdadm
+  ansible.builtin.command: >
+    mdadm --create --verbose {{ md_device }}
+    --level={{ raid_level }}
+    --raid-devices={{ disks | length }}
+    --bitmap=internal
+    {{ disks | join(' ') }}
+  args:
+    creates: "{{ md_device }}"
+  ignore_errors: true
+  when: not md_stat.stat.exists
+
+- name: Update mdadm.conf configuration
+  ansible.builtin.shell: |
+    mdadm --detail --scan >> /etc/mdadm/mdadm.conf
+  args:
+    creates: /etc/mdadm/mdadm.conf
+  changed_when: false
+  when: not md_stat.stat.exists
+
+- name: Update initramfs (Debian/Ubuntu)
+  ansible.builtin.command: update-initramfs -u
+  ignore_errors: true
+  when: not md_stat.stat.exists
+
+- name: Check if filesystem already exists on RAID
+  ansible.builtin.command: blkid -s UUID -o value "{{ md_device }}"
+  register: blkid_result
+  failed_when: false
+  changed_when: false
+
+- name: Create filesystem (ext4)
+  ansible.builtin.filesystem:
+    fstype: ext4
+    dev: "{{ md_device }}"
+  when: blkid_result.rc != 0
+
+- name: Create mount point
+  ansible.builtin.file:
+    path: "{{ mount_point }}"
+    state: directory
+    mode: '0755'
+  when: mount_check.rc != 0
+
+- name: Add entry to fstab
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    line: "UUID={{ blkid_result.stdout_lines[0] }}    {{ mount_point }}    {{ filesystem_type }}    defaults    0 0"
+    create: true
+  when: mount_check.rc != 0
+
+- name: Mount RAID array
+  ansible.builtin.command: mount {{ md_device }} {{ mount_point }}
+  args:
+    creates: "{{ mount_point }}/.mounted"
+  ignore_errors: true
+  when: mount_check.rc != 0

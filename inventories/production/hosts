@@ -16,3 +16,6 @@ clever-panda.phorge
 
 [hpc]
 hpc0.phorge gpu_brand=['nvidia','amd']
+
+[storage]
+datastore-0.phorge

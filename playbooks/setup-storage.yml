@@ -3,4 +3,5 @@
   hosts: storage
   become: true
   roles:
-    - storage-servers
+    # - rolehippie.mdadm
+    - geerlingguy.nfs

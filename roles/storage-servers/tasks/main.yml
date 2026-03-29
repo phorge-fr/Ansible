@@ -1,3 +1,0 @@
----
- - ansible.builtin.import_tasks: install-deps.yml
- - ansible.builtin.import_tasks: setup-raid.yml

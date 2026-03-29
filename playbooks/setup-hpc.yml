@@ -3,4 +3,8 @@
   hosts: hpc
   become: true
   roles:
-    - hpc-servers
+    - docker
+    - rocm_drivers
+    - nvidia_drivers
+    - nvidia_container_toolkit
+

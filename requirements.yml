@@ -1,5 +1,12 @@
 roles:
   - name: geerlingguy.node_exporter
+  - name: geerlingguy.nfs
+  - name: rolehippie.mdadm
+    src: https://github.com/l-nmch/mdadm.git
+    scm: git
+    version: v3.5.0
 
 collections:
   - name: community.docker
+  - name: community.general
+  - name: ansible.posix

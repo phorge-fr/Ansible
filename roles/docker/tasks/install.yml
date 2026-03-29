@@ -28,6 +28,7 @@
       Suites: {{ ansible_lsb.codename }}
       Components: stable
       Signed-By: /etc/apt/keyrings/docker.asc
+    mode: '0644'
 
 - name: Update apt cache
   ansible.builtin.apt:
@@ -41,7 +42,7 @@
       - containerd.io
       - docker-buildx-plugin
       - docker-compose-plugin
-    state: latest
+    state: present
 
 - name: Ensure Docker is started and enabled
   ansible.builtin.systemd:

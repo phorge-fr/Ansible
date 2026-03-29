@@ -1,0 +1,14 @@
+---
+dependencies: []
+
+galaxy_info:
+  role_name: rocm_drivers
+  author: l-nmch
+  description: ROCm Installation and Configuration
+  company: "Phorge"
+  license: "license (BSD, MIT)"
+  min_ansible_version: 2.17.13
+  platforms:
+    - name: Ubuntu
+      versions:
+        - all

@@ -1,0 +1,19 @@
+---
+
+- name: Run nvidia-detector
+  ansible.builtin.command:
+    cmd: nvidia-detector
+  register: nvidia_detector
+  changed_when: false
+  failed_when: false
+  become: true
+
+- name: Install NVIDIA driver
+  ansible.builtin.apt:
+    name: "{{ nvidia_detector.stdout_lines }}"
+    state: present
+    update_cache: yes
+  become: true
+  when:
+    - nvidia_detector is defined
+    - nvidia_detector.stdout | length > 0

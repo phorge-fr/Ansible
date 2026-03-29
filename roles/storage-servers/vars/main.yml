@@ -1,9 +1,0 @@
-md_device: "/dev/md0"
-raid_level: 5
-disks:
-  - "/dev/nvme0n1"
-  - "/dev/nvme1n1"
-  - "/dev/nvme2n1"
-  - "/dev/nvme3n1"
-mount_point: "/mnt/main"
-filesystem_type: "ext4"

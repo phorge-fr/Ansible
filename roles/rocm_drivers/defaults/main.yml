@@ -1,0 +1,4 @@
+---
+# Default ROCm version
+rocm_version: "7.1"
+ubuntu_codename: "noble"

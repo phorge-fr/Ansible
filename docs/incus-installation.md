@@ -19,8 +19,8 @@ This setup comes with many features such as:
 
 We have 2 group of 3 nodes:
 
-- Anvil: 16Gb RAM, 4c/4t, 300GB HDD, 128GB NvME, 2x 1G NIC
-- Hammer: 8Gb RAM, 4c/4t, 128GB NvME, 2x 1G NIC
+- Anvil: 16Gb RAM, 4c/4t, 300GB HDD, 256GB NvME, 2x 1G NIC
+- Hammer: 8Gb RAM, 4c/4t, 256GB NvME, 2x 1G NIC
 
 > Might change in the future
 
@@ -147,12 +147,12 @@ incus config set logging.loki-frontplane.target.type="loki"
 incus config set logging.loki-frontplane.types="logging,lifecycle"
 incus config set oidc.claim="email"
 incus config set oidc.client.id="Incus"
-incus config set oidc.issuer="https=//auth.phorge.fr"
+incus config set oidc.issuer="https://auth.phorge.fr"
 incus config set oidc.scopes="openid, offline_access, email"
 incus config set openfga.api.token="<openfga-preshared-key>"
-incus config set openfga.api.url="http=//10.0.0.12=8080"
+incus config set openfga.api.url="http://10.0.0.12:8080"
 incus config set openfga.store.id="<openfga-store-id>"
-incus config set user.grafana_base_url="https=//monitoring.phorge.fr"
+incus config set user.grafana_base_url="https://monitoring.phorge.fr"
 incus config set user.ui.title="Phorge Cloud IaaS"
 ```
 

@@ -1,0 +1,28 @@
+- name: Create directory for rustfs
+  file:
+    path: /opt/rustfs/
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Copy files for rustfs
+  template:
+    src: docker-compose.yml.j2
+    dest: /opt/rustfs/docker-compose.yml
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Create data directory for rustfs
+  file:
+    path: "{{ rustfs_config.data_path }}"
+    state: directory
+    owner: 10001
+    group: 10001
+    mode: '0755'
+
+- name: Launch rustfs with Docker Compose
+  community.docker.docker_compose_v2:
+    project_src: /opt/rustfs
+    state: present

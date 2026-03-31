@@ -1,0 +1,21 @@
+services:
+  rustfs:
+    image: rustfs/rustfs:{{ rustfs_config.version }}
+    container_name: rustfs_container
+    restart: unless-stopped
+
+    ports:
+      - "{{ rustfs_config.port }}:9000"
+      - "{{ rustfs_config.console_port }}:9001"
+
+    volumes:
+      - "{{ rustfs_config.data_path }}:/data"
+
+    environment:  
+      - RUSTFS_CONSOLE_ENABLE={{ rustfs_config.enable_console | lower }}
+      - RUSTFS_ACCESS_KEY={{ rustfs_config.access_key }}
+      - RUSTFS_SECRET_KEY={{ rustfs_config.secret_key }}
+    command:
+      - --address=:9000
+      - /data
+      

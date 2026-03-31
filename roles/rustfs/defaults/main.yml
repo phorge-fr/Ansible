@@ -1,0 +1,8 @@
+rustfs_config:
+  version: "latest"
+  port: ":9000"
+  console_port: ":9001"
+  data_path: "/opt/rustfs/data"
+  enable_console: true
+  access_key: "your_access_key"
+  secret_key: "your_secret_key"

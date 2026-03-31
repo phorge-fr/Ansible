@@ -3,5 +3,7 @@
   hosts: storage
   become: true
   roles:
-    # - rolehippie.mdadm
+    - rolehippie.mdadm
     - geerlingguy.nfs
+    - docker
+    - rustfs

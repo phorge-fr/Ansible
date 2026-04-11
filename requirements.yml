@@ -1,5 +1,4 @@
 roles:
-  - name: geerlingguy.node_exporter
   - name: geerlingguy.nfs
   - name: rolehippie.mdadm
     src: https://github.com/l-nmch/mdadm.git
@@ -10,3 +9,4 @@ collections:
   - name: community.docker
   - name: community.general
   - name: ansible.posix
+  - name: grafana.grafana

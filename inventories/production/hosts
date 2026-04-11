@@ -1,21 +1,40 @@
-[frontplane]
+[frontplane-master]
 quiet-lion.phorge
 happy-whale.phorge
 sly-deer.phorge
+
+[frontplane-worker]
 strong-owl.phorge
 silent-lion.phorge
 calm-rabbit.phorge
 
-[iaas]
+[iaas-anvil]
 clever-lynx.phorge
 gentle-fox.phorge
 mighty-deer.phorge
+
+[iaas-hammer]
 brave-whale.phorge
 mighty-rabbit.phorge
 clever-panda.phorge
 
-[hpc]
-hpc0.phorge gpu_brand=['nvidia','amd']
+[hpc-gpu]
+hpc-gpu-0.phorge
+
+[hpc-npu]
+hpc-npu-0.phorge
 
 [storage]
 datastore-0.phorge
+
+[iaas:children]
+iaas-anvil
+iaas-hammer
+
+[frontplane:children]
+frontplane-master
+frontplane-worker
+
+[hpc:children]
+hpc-gpu
+hpc-npu

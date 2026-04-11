@@ -21,3 +21,26 @@ ansible-galaxy install -r requirements.yml
 ```bash
 ansible -m ping all
 ```
+
+## Encryption and execution
+
+### Encrypt variables
+
+```bash
+ansible-vault encrypt_string --vault-password-file vault_pass '<yaml_value_to_encrypt>' --name '<yaml_key>'
+```
+
+### Encrypt files
+
+```bash
+ansible-vault encrypt_string \
+  --vault-password-file vault_pass \
+  --stdin-name '<yaml_key>' \
+  < file_to.encrypt
+```
+
+### Run playbooks with encrypted variables
+
+```bash
+ansible-playbook -i inventories/production/hosts playbooks/<playbook>.yml --vault-password-file vault_pass 
+```

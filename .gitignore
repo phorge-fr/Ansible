@@ -3,3 +3,5 @@
 collections/
 roles/geerlingguy.*
 roles/rolehippie.*
+vault_pass
+.ignore/

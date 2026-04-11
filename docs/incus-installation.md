@@ -141,16 +141,21 @@ incus config set acme.provider.environment=|
 incus config set cluster.healing_threshold="4"
 incus config set cluster.offline_threshold="11"
 incus config set core.bgp_asn="65535"
-incus config set logging.loki-frontplane.lifecycle.types="instance"
-incus config set logging.loki-frontplane.target.address="http://10.0.0.11:3100"
-incus config set logging.loki-frontplane.target.type="loki"
-incus config set logging.loki-frontplane.types="logging,lifecycle"
+incus config set core.metrics_authentication: "false"
+incus config set logging.loki-frontplane.logging.level: debug
+incus config set logging.loki-frontplane.target.address: http://loki.frontplane.phorge
+incus config set logging.loki-frontplane.target.ca_cert: |
+   <root-ca-certificate>
+incus config set logging.loki-frontplane.target.password: <basic-auth-password>
+incus config set logging.loki-frontplane.target.type: loki
+incus config set logging.loki-frontplane.target.username: iaas
+incus config set logging.loki-frontplane.types: logging,lifecycle,network-acl
 incus config set oidc.claim="email"
 incus config set oidc.client.id="Incus"
 incus config set oidc.issuer="https://auth.phorge.fr"
 incus config set oidc.scopes="openid, offline_access, email"
 incus config set openfga.api.token="<openfga-preshared-key>"
-incus config set openfga.api.url="http://10.0.0.12:8080"
+incus config set openfga.api.url="http://openfga.frontplane.phorge"
 incus config set openfga.store.id="<openfga-store-id>"
 incus config set user.grafana_base_url="https://monitoring.phorge.fr"
 incus config set user.ui.title="Phorge Cloud IaaS"
@@ -166,7 +171,7 @@ incus config set core.metrics_address="10.1.0.x:8444"
 incus config set core.bgp_address="10.1.0.x"
 incus config set core.bgp_asn="65535"
 incus config set core.bgp_routerid="10.1.0.x"
-incus config set core.storage_buckets_address 10.1.0.x:8555
+incus config set core.storage_buckets_address 10.1.0.x:8555 # (optionnal)
 # Replace x by the last IP bit for each machine
 ```
 
@@ -220,6 +225,7 @@ microceph cluster join <token> # Repeate on each nodes with more than 1 disk
 ```bash
 microceph disk add /dev/nvme0n1 --wipe
 microceph enable rgw # (Optional) Enables S3 storage
+ceph config set mgr mgr/prometheus/server_addr 127.0.0.1 # Set prometheus monitoring address
 ```
 
 7. Verify disks
@@ -227,6 +233,7 @@ microceph enable rgw # (Optional) Enables S3 storage
 [Bootstrap node]
 ```bash
 microceph disk list
+ceph mgr module enable prometheus # Enable prometheus
 ```
 
 Will prompt:

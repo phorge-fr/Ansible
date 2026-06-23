@@ -39,5 +39,9 @@
   ansible.builtin.apt:
     name:
       - rocm
+      - rocm-dev
+      - rocm-libs
+      - rocm-hip-sdk
+      - rocblas
     state: present
     update_cache: yes

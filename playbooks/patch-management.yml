@@ -1,6 +1,0 @@
----
-- name: Patch Management - Apply Updates & Patches
-  hosts: all
-  become: true
-  roles:
-    - patch-management

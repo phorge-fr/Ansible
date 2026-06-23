@@ -1,40 +1,32 @@
-[frontplane-master]
-quiet-lion.phorge
-happy-whale.phorge
-sly-deer.phorge
+[control]
+ctrl-rpi4-01.phorge
+ctrl-rpi4-02.phorge
+ctrl-rpi4-03.phorge
 
-[frontplane-worker]
-strong-owl.phorge
-silent-lion.phorge
-calm-rabbit.phorge
+[core]
+core-wyse-01.phorge
+core-wyse-02.phorge
+core-wyse-03.phorge
 
-[iaas-anvil]
-clever-lynx.phorge
-gentle-fox.phorge
-mighty-deer.phorge
-
-[iaas-hammer]
-brave-whale.phorge
-mighty-rabbit.phorge
-clever-panda.phorge
-
-[hpc-gpu]
-hpc-gpu-0.phorge
-
-[hpc-npu]
-hpc-npu-0.phorge
+[svc]
+svc-rock64-01.phorge
+svc-rock64-02.phorge
+svc-rock64-03.phorge
 
 [storage]
-datastore-0.phorge
+stor-rpi5-01.phorge
 
-[iaas:children]
-iaas-anvil
-iaas-hammer
+[ai-gpu]
+ai-z440-01.phorge
 
-[frontplane:children]
-frontplane-master
-frontplane-worker
+[ai-npu]
+ai-rpi5-01.phorge
 
-[hpc:children]
-hpc-gpu
-hpc-npu
+[ai:children]
+ai-gpu
+ai-npu
+
+[compute]
+comp-opti-01.phorge
+comp-opti-02.phorge
+comp-opti-03.phorge

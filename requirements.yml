@@ -1,9 +1,9 @@
 roles:
   - name: geerlingguy.nfs
   - name: rolehippie.mdadm
-    src: https://github.com/l-nmch/mdadm.git
+    src: https://github.com/rolehippie/mdadm.git
     scm: git
-    version: v3.5.0
+    version: v4.1.0
 
 collections:
   - name: community.docker

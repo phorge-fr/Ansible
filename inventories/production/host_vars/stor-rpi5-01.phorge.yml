@@ -3,13 +3,16 @@ mdadm_arrays:
     level: 5
     filesystem: ext4
     mountpoint: /mnt/main
+    args:
+      - --force
+      - --run
     devices:
       - /dev/nvme0n1
       - /dev/nvme1n1
       - /dev/nvme2n1
       - /dev/nvme3n1
 
-nfs_exports: [ "/mnt/main/csi-share 10.0.0.1(rw,sync,no_subtree_check) 10.0.0.2(rw,sync,no_subtree_check) 10.0.0.3(rw,sync,no_subtree_check) 10.0.0.4(rw,sync,no_subtree_check) 10.0.0.5(rw,sync,no_subtree_check) 10.0.0.6(rw,sync,no_subtree_check)" ]
+nfs_exports: [ "/mnt/main/csi-svc 10.3.0.1(rw,sync,no_subtree_check) 10.3.0.2(rw,sync,no_subtree_check) 10.3.0.3(rw,sync,no_subtree_check)" ]
 
 rustfs_config:
   version: "latest"

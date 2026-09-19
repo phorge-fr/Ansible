@@ -1,3 +1,4 @@
+---
 - name: Install Alloy
   hosts: all
   become: true

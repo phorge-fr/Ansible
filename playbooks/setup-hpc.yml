@@ -7,4 +7,3 @@
     - rocm_drivers
     - nvidia_drivers
     - nvidia_container_toolkit
-

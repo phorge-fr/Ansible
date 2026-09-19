@@ -5,3 +5,9 @@ KbdInteractiveAuthentication no
 PermitEmptyPasswords no
 PubkeyAuthentication yes
 X11Forwarding no
+{% if ssh_hardening_password_login_users | length > 0 %}
+{% set ssh_hardening_match = 'User ' ~ (ssh_hardening_password_login_users | join(',')) ~ ((' Address ' ~ (ssh_hardening_password_login_sources | join(','))) if ssh_hardening_password_login_sources | length > 0 else '') %}
+
+Match {{ ssh_hardening_match }}
+	PasswordAuthentication yes
+{% endif %}

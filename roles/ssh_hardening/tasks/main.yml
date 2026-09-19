@@ -60,3 +60,23 @@
       another directive read before the drop-in wins (first value wins in sshd_config).
     quiet: true
   when: not ansible_check_mode
+
+- name: Read the effective sshd configuration for the password login exceptions
+  ansible.builtin.command: >-
+    /usr/sbin/sshd -T -C user={{ item }},host=localhost,addr={{ (ssh_hardening_password_login_sources | first | default('127.0.0.1')).split('/')[0] }}
+  loop: "{{ ssh_hardening_password_login_users }}"
+  register: ssh_hardening_exceptions
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Verify that the password login exceptions are effective
+  ansible.builtin.assert:
+    that: "'passwordauthentication yes' in item.stdout_lines"
+    fail_msg: >-
+      {{ item.item }} cannot log in with a password on {{ inventory_hostname }}
+      from {{ ssh_hardening_password_login_sources | join(', ') }}.
+    quiet: true
+  loop: "{{ ssh_hardening_exceptions.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: not ansible_check_mode

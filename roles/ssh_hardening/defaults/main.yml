@@ -1,3 +1,5 @@
 ---
 ssh_hardening_permit_root_login: prohibit-password
 ssh_hardening_password_authentication: false
+ssh_hardening_password_login_users: []
+ssh_hardening_password_login_sources: []

@@ -3,3 +3,8 @@ management_network: 192.168.2.0/24
 
 firewall_ssh_sources:
   - "{{ management_network }}"
+
+ssh_hardening_password_login_users:
+  - user
+ssh_hardening_password_login_sources:
+  - "{{ management_network }}"

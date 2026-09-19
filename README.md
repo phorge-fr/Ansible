@@ -30,6 +30,8 @@ docs/                     # manual procedures not yet automated
 | `hpc` (`hpc-gpu`, `hpc-npu`) | `ai-z440-01`, `ai-rpi5-01` | `setup-hpc.yml` | `docker`, `rocm_drivers`, `nvidia_drivers`, `nvidia_container_toolkit` |
 | `compute` | `comp-opti-01` to `03` | none, see [docs/incus-installation.md](docs/incus-installation.md) | none |
 | `all` | every host | `setup-alloy.yml` | `grafana.grafana.alloy` |
+| `all` | every host | `setup-hardening.yml` | `ssh_hardening` |
+| `all` | every host | `setup-firewall.yml` (one node at a time, `audit` mode by default) | `firewall` |
 
 `setup-alloy.yml` reads `alloy_config` from `group_vars`. Only `storage` and `compute` define it today, the other groups fall back to the role default (empty configuration).
 
@@ -42,6 +44,8 @@ Project roles, each documented in its own `README.md`:
 - [nvidia_container_toolkit](roles/nvidia_container_toolkit/README.md)
 - [rocm_drivers](roles/rocm_drivers/README.md)
 - [rustfs](roles/rustfs/README.md)
+- [ssh_hardening](roles/ssh_hardening/README.md)
+- [firewall](roles/firewall/README.md)
 
 `hpc-servers` (monitoring and LLM inference stack for the HPC nodes) is not wired to any playbook yet.
 

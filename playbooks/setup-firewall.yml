@@ -1,0 +1,7 @@
+---
+- name: Configure the host firewall, one node at a time
+  hosts: all
+  become: true
+  serial: 1
+  roles:
+    - firewall

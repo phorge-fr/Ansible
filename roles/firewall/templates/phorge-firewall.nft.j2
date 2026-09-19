@@ -1,0 +1,51 @@
+#!/usr/sbin/nft -f
+# Managed by Ansible (role firewall), local changes are overwritten.
+# Mode: {{ firewall_mode }}
+table inet phorge_filter
+delete table inet phorge_filter
+
+table inet phorge_filter {
+	chain input {
+		type filter hook input priority filter; policy {{ 'drop' if firewall_mode == 'enforce' else 'accept' }};
+
+		iifname "lo" accept
+		ct state established,related accept
+
+		ip protocol icmp icmp type echo-request limit rate 10/second accept
+		ip protocol icmp icmp type { destination-unreachable, time-exceeded, parameter-problem } accept
+		ip6 nexthdr icmpv6 icmpv6 type echo-request limit rate 10/second accept
+		ip6 nexthdr icmpv6 icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
+		udp sport 67 udp dport 68 accept comment "DHCP client"
+{% if firewall_ssh_sources | length > 0 %}
+		ip saddr { {{ firewall_ssh_sources | join(', ') }} } tcp dport {{ firewall_ssh_port }} accept comment "SSH from the management network"
+{% endif %}
+{% if firewall_trusted_sources | length > 0 %}
+		ip saddr { {{ firewall_trusted_sources | join(', ') }} } accept comment "Trusted sources"
+{% endif %}
+{% for rule in firewall_allowed_ports %}
+		{% if rule.sources is defined %}ip saddr { {{ rule.sources | join(', ') }} } {% endif %}{{ rule.proto }} dport { {{ rule.ports | join(', ') }} } accept comment "{{ rule.comment }}"
+{% endfor %}
+
+		counter comment "Unmatched inbound packets"
+		limit rate {{ firewall_log_rate }} log prefix "phorge-firewall[{{ firewall_mode }}]: "
+	}
+{% if firewall_published_ports | length > 0 %}
+
+	chain forward {
+		type filter hook forward priority filter; policy accept;
+
+{% if firewall_trusted_sources | length > 0 %}
+		ct state new ct status dnat ip saddr { {{ firewall_trusted_sources | join(', ') }} } accept comment "Trusted sources"
+{% endif %}
+{% for rule in firewall_published_ports %}
+		ct state new ct status dnat {% if rule.sources is defined %}ip saddr { {{ rule.sources | join(', ') }} } {% endif %}ct original protocol {{ rule.proto }} ct original proto-dst { {{ rule.ports | join(', ') }} } accept comment "{{ rule.comment }}"
+{% endfor %}
+
+		ct state new ct status dnat counter comment "Unmatched published ports"
+		ct state new ct status dnat limit rate {{ firewall_log_rate }} log prefix "phorge-firewall-forward[{{ firewall_mode }}]: "
+{% if firewall_mode == 'enforce' %}
+		ct state new ct status dnat drop
+{% endif %}
+	}
+{% endif %}
+}

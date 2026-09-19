@@ -1,0 +1,4 @@
+#!/bin/sh
+# Armed by the firewall role before an enforce run, cancelled once SSH is confirmed reachable.
+/usr/sbin/nft delete table inet phorge_filter
+/usr/bin/systemctl disable phorge-firewall.service

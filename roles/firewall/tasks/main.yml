@@ -1,0 +1,163 @@
+---
+- name: Check the firewall configuration
+  ansible.builtin.assert:
+    that:
+      - firewall_mode in ['audit', 'enforce']
+      - firewall_mode == 'audit' or firewall_ssh_sources | length > 0
+    fail_msg: >-
+      firewall_mode must be audit or enforce, and enforce requires firewall_ssh_sources
+      (otherwise SSH would be locked out).
+    quiet: true
+
+- name: Check that the firewall cannot lock SSH out
+  when: firewall_mode == 'enforce'
+  block:
+    - name: Read the address the node sees for this SSH connection
+      ansible.builtin.command: /usr/bin/printenv SSH_CONNECTION
+      become: false
+      register: firewall_ssh_connection
+      changed_when: false
+      check_mode: false
+
+    - name: Read the ports sshd listens on
+      ansible.builtin.command: /usr/sbin/sshd -T
+      register: firewall_sshd_config
+      changed_when: false
+      check_mode: false
+
+    - name: Look for the SSH client address in firewall_ssh_sources
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_facts['python']['executable'] }}"
+          - -c
+          - |
+            import ipaddress, sys
+            client = ipaddress.ip_address(sys.argv[1])
+            def match(source):
+                if '-' in source:
+                    low, high = (ipaddress.ip_address(part) for part in source.split('-'))
+                    return low <= client <= high
+                return client in ipaddress.ip_network(source, strict=False)
+            sys.exit(0 if any(match(s) for s in sys.argv[2].split(',')) else 1)
+          - "{{ firewall_ssh_connection.stdout.split()[0] }}"
+          - "{{ firewall_ssh_sources | join(',') }}"
+      register: firewall_ssh_client
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Refuse to enforce a ruleset that would lock SSH out
+      ansible.builtin.assert:
+        that:
+          - firewall_ssh_client.rc == 0
+          - ('port ' ~ firewall_ssh_port) in firewall_sshd_config.stdout_lines
+        fail_msg: >-
+          {{ inventory_hostname }} sees this SSH connection coming from
+          {{ firewall_ssh_connection.stdout.split()[0] }}, which must be in firewall_ssh_sources
+          ({{ firewall_ssh_sources | join(', ') }}), and sshd must listen on port {{ firewall_ssh_port }}.
+        quiet: true
+
+- name: Check whether nftables is installed
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/dpkg-query
+      - --show
+      - "--showformat=${db:Status-Status}"
+      - nftables
+  register: firewall_nftables
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Report that nftables would be installed
+  ansible.builtin.debug:
+    msg: nftables is not installed on {{ inventory_hostname }} and would be installed
+  when: firewall_nftables.stdout != 'installed' and ansible_check_mode
+
+- name: Install nftables
+  ansible.builtin.apt:
+    name: nftables
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  when: firewall_nftables.stdout != 'installed' and not ansible_check_mode
+
+- name: Install the firewall ruleset
+  ansible.builtin.template:
+    src: phorge-firewall.nft.j2
+    dest: /etc/phorge-firewall.nft
+    owner: root
+    group: root
+    mode: '0600'
+    validate: /usr/sbin/nft -c -f %s
+  register: firewall_ruleset
+
+- name: Install the firewall unit
+  ansible.builtin.copy:
+    src: phorge-firewall.service
+    dest: /etc/systemd/system/phorge-firewall.service
+    owner: root
+    group: root
+    mode: '0644'
+  register: firewall_unit
+
+- name: Install the rollback script
+  ansible.builtin.copy:
+    src: phorge-firewall-rollback
+    dest: /usr/local/sbin/phorge-firewall-rollback
+    owner: root
+    group: root
+    mode: '0750'
+
+- name: Check whether the ruleset is loaded
+  ansible.builtin.command: /usr/sbin/nft list table inet phorge_filter
+  register: firewall_table
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Apply the ruleset
+  when: not ansible_check_mode and (firewall_ruleset.changed or firewall_unit.changed or firewall_table.rc != 0)
+  block:
+    - name: Clear any stale rollback timer
+      ansible.builtin.systemd:
+        name: phorge-firewall-rollback.timer
+        state: stopped
+      failed_when: false
+      when: firewall_mode == 'enforce'
+
+    - name: Arm the rollback timer
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/systemd-run
+          - --unit=phorge-firewall-rollback
+          - "--on-active={{ firewall_rollback_seconds }}"
+          - /usr/local/sbin/phorge-firewall-rollback
+      changed_when: true
+      when: firewall_mode == 'enforce'
+
+    - name: Load the ruleset
+      ansible.builtin.command: /usr/sbin/nft -f /etc/phorge-firewall.nft
+      changed_when: true
+
+    - name: Load the ruleset at boot
+      ansible.builtin.systemd:
+        name: phorge-firewall
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Check that SSH is still reachable from the controller
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host | default(inventory_hostname) }}"
+        port: "{{ firewall_ssh_port }}"
+        timeout: 20
+      delegate_to: localhost
+      become: false
+      when: firewall_mode == 'enforce'
+
+    - name: Disarm the rollback timer
+      ansible.builtin.systemd:
+        name: phorge-firewall-rollback.timer
+        state: stopped
+      when: firewall_mode == 'enforce'

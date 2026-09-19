@@ -16,17 +16,14 @@ nfs_exports:
   # yamllint disable-line rule:line-length
   - "/mnt/main/csi-svc 10.3.0.1(rw,sync,no_subtree_check,no_root_squash) 10.3.0.2(rw,sync,no_subtree_check,no_root_squash) 10.3.0.3(rw,sync,no_subtree_check,no_root_squash)"
 
+firewall_mode: enforce
+
 firewall_allowed_ports:
   - proto: tcp
     ports: [2049]
     sources:
       - 10.3.0.1-10.3.0.3
-    comment: NFS from the svc cluster nodes
-  - proto: udp
-    ports: [2049]
-    sources:
-      - 10.3.0.1-10.3.0.3
-    comment: NFS from the svc cluster nodes
+    comment: NFSv4 from the svc cluster nodes
 
 # Docker-published ports reach the container through the forward chain, not the input one
 firewall_published_ports:

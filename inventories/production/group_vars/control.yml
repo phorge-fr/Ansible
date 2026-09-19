@@ -1,12 +1,44 @@
 ---
-firewall_trusted_sources:
-  - 10.1.0.0/24
-  # k0s pod CIDR
-  - 10.244.0.0/16
+firewall_mode: enforce
 
 firewall_allowed_ports:
   - proto: tcp
-    ports: [6443, 9443]
+    ports: [6443]
     sources:
       - "{{ management_network }}"
-    comment: Kubernetes and k0s APIs from the management network
+      - &nodes 10.1.0.1-10.1.0.3
+      - &pods 10.244.0.0/16
+    comment: Kubernetes API from the management network, the nodes and the pods
+  - proto: tcp
+    ports: [9443]
+    sources:
+      - "{{ management_network }}"
+      - *nodes
+    comment: k0s API from the management network and the nodes
+  - proto: tcp
+    ports: [2380]
+    sources:
+      - *nodes
+    comment: etcd peers
+  - proto: tcp
+    ports: [10250]
+    sources:
+      - *nodes
+      - *pods
+    comment: kubelet from the nodes and the pods
+  - proto: tcp
+    ports: [4240]
+    sources:
+      - *nodes
+    comment: Cilium health checks
+  - proto: udp
+    ports: [8472]
+    sources:
+      - *nodes
+    comment: Cilium VXLAN tunnel
+
+firewall_allowed_protocols:
+  - proto: vrrp
+    sources:
+      - *nodes
+    comment: keepalived VRRP between the nodes

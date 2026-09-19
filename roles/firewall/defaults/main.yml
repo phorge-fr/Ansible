@@ -4,6 +4,7 @@ firewall_ssh_port: 22
 firewall_ssh_sources: []
 firewall_trusted_sources: []
 firewall_allowed_ports: []
+firewall_allowed_protocols: []
 firewall_published_ports: []
 firewall_log_rate: 5/minute
 firewall_rollback_seconds: 180

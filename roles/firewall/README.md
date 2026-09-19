@@ -2,7 +2,7 @@
 
 Host firewall based on nftables. The role only manages its own table, `inet phorge_filter`, and never touches the tables of Cilium or Docker.
 
-- `input` chain: default deny. Always allowed: loopback, established connections, ICMP essentials (echo requests are rate limited), DHCP client replies and SSH from `firewall_ssh_sources`. Then `firewall_trusted_sources` (everything) and `firewall_allowed_ports`.
+- `input` chain: default deny. Always allowed: loopback, established connections, ICMP essentials (echo requests are rate limited), DHCP client replies and SSH from `firewall_ssh_sources`. Then `firewall_trusted_sources` (everything), `firewall_allowed_ports` and `firewall_allowed_protocols`.
 - `forward` chain, only when `firewall_published_ports` is not empty: filters the new connections that a DNAT sends to a container (ports published by Docker never go through the `input` chain). Other forwarded traffic is untouched.
 
 ## Modes
@@ -21,6 +21,7 @@ Host firewall based on nftables. The role only manages its own table, `inet phor
 | `firewall_ssh_sources` | `[]` | CIDRs or ranges allowed to reach SSH. |
 | `firewall_trusted_sources` | `[]` | CIDRs or ranges allowed to reach everything (cluster VLAN, pod CIDR). |
 | `firewall_allowed_ports` | `[]` | Services running on the host. |
+| `firewall_allowed_protocols` | `[]` | IP protocols that have no port, such as `vrrp`. |
 | `firewall_published_ports` | `[]` | Ports published by Docker. |
 | `firewall_log_rate` | `5/minute` | Rate limit of the log rule. |
 | `firewall_rollback_seconds` | `180` | Delay of the rollback timer in `enforce` mode. |
@@ -54,9 +55,29 @@ ansible-playbook playbooks/setup-firewall.yml --check --diff --limit <host> -e f
 
 Then, in `enforce` mode, the role arms a `systemd-run` timer before loading the rules, then checks from the controller that the SSH port answers on a new connection. If it does, the timer is cancelled. If not, the play fails and the timer deletes the table and disables `phorge-firewall.service`: the node stays reachable, also after a reboot. Running the playbook again restores the firewall.
 
+## Rollback
+
+Back to `audit` (nothing is blocked, the counters and the logs stay), from the controller:
+
+```bash
+ansible-playbook playbooks/setup-firewall.yml --limit <host> -e firewall_mode=audit
+```
+
+`-e` only applies to this run: the next run without it goes back to the value of the inventory. Set `firewall_mode: audit` in the `group_vars` or `host_vars` to keep it.
+
+Emergency removal, on the node as root (over SSH, or with the emergency account of the `ssh_hardening` role):
+
+```bash
+/usr/local/sbin/phorge-firewall-rollback
+```
+
+It deletes the table `inet phorge_filter` and disables `phorge-firewall.service`, so the node stays open after a reboot. The tables of Cilium and Docker are not touched. Run the playbook again to restore the firewall.
+
+If SSH is not reachable from any address of `firewall_ssh_sources`, only the console is left: the unit is enabled, so a reboot loads the same rules again. Run the script above from the console.
+
 ## Limits
 
-- Tested in a Debian 12 container (audit, enforce, published ports, rollback), not yet on the real nodes: start in `audit`.
+- Tested in a Debian 12 container (audit, enforce, published ports, rollback), then rolled out in `enforce` one node at a time on the k0s and storage nodes. Start any other group in `audit`.
 - Allow rules match IPv4 sources.
 - The check only covers the address Ansible connects from. Every other place you may connect from must be listed in `firewall_ssh_sources`.
 - `--check` needs `python3-apt` on the target (any earlier real run of an apt task installs it).

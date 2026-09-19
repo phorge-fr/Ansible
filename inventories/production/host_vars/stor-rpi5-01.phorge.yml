@@ -16,6 +16,32 @@ nfs_exports:
   # yamllint disable-line rule:line-length
   - "/mnt/main/csi-svc 10.3.0.1(rw,sync,no_subtree_check,no_root_squash) 10.3.0.2(rw,sync,no_subtree_check,no_root_squash) 10.3.0.3(rw,sync,no_subtree_check,no_root_squash)"
 
+firewall_allowed_ports:
+  - proto: tcp
+    ports: [2049]
+    sources:
+      - 10.3.0.1-10.3.0.3
+    comment: NFS from the svc cluster nodes
+  - proto: udp
+    ports: [2049]
+    sources:
+      - 10.3.0.1-10.3.0.3
+    comment: NFS from the svc cluster nodes
+
+# Docker-published ports reach the container through the forward chain, not the input one
+firewall_published_ports:
+  - proto: tcp
+    ports: [9000]
+    sources:
+      - 10.2.0.1-10.2.0.3
+      - "{{ management_network }}"
+    comment: rustfs S3 API from the core cluster nodes and the management network
+  - proto: tcp
+    ports: [9001]
+    sources:
+      - "{{ management_network }}"
+    comment: rustfs console from the management network
+
 rustfs_config:
   version: "latest"
   port: ":9000"

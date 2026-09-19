@@ -1,0 +1,12 @@
+---
+firewall_trusted_sources:
+  - 10.2.0.0/24
+  # k0s pod CIDR
+  - 10.244.0.0/16
+
+firewall_allowed_ports:
+  - proto: tcp
+    ports: [6443, 9443]
+    sources:
+      - "{{ management_network }}"
+    comment: Kubernetes and k0s APIs from the management network

@@ -1,4 +1,8 @@
 ---
+firewall_trusted_sources:
+  - 10.10.0.0/24
+  - 10.10.1.0/24
+
 alloy_uninstall: false
 
 alloy_config: !vault |

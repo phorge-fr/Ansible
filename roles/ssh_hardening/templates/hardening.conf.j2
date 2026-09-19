@@ -1,0 +1,7 @@
+# Managed by Ansible (role ssh_hardening), local changes are overwritten.
+PermitRootLogin {{ ssh_hardening_permit_root_login }}
+PasswordAuthentication {{ 'yes' if ssh_hardening_password_authentication else 'no' }}
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+PubkeyAuthentication yes
+X11Forwarding no

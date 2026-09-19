@@ -1,0 +1,3 @@
+---
+ssh_hardening_permit_root_login: prohibit-password
+ssh_hardening_password_authentication: false

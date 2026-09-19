@@ -16,15 +16,15 @@ svc-rock64-03.phorge
 [storage]
 stor-rpi5-01.phorge
 
-[ai-gpu]
+[hpc-gpu]
 ai-z440-01.phorge
 
-[ai-npu]
+[hpc-npu]
 ai-rpi5-01.phorge
 
-[ai:children]
-ai-gpu
-ai-npu
+[hpc:children]
+hpc-gpu
+hpc-npu
 
 [compute]
 comp-opti-01.phorge

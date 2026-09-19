@@ -5,7 +5,7 @@
       - ca-certificates
       - curl
     state: present
-    update_cache: yes
+    update_cache: true
 
 - name: Create directory for Docker keyrings
   ansible.builtin.file:
@@ -32,7 +32,7 @@
 
 - name: Update apt cache
   ansible.builtin.apt:
-    update_cache: yes
+    update_cache: true
 
 - name: Install Docker packages
   ansible.builtin.apt:
@@ -48,4 +48,4 @@
   ansible.builtin.systemd:
     name: docker
     state: started
-    enabled: yes
+    enabled: true

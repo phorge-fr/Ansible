@@ -1,5 +1,5 @@
 - name: Create directory for rustfs
-  file:
+  ansible.builtin.file:
     path: /opt/rustfs/
     state: directory
     owner: root
@@ -7,7 +7,7 @@
     mode: '0755'
 
 - name: Copy files for rustfs
-  template:
+  ansible.builtin.template:
     src: docker-compose.yml.j2
     dest: /opt/rustfs/docker-compose.yml
     owner: root
@@ -15,7 +15,7 @@
     mode: '0644'
 
 - name: Create data directory for rustfs
-  file:
+  ansible.builtin.file:
     path: "{{ rustfs_config.data_path }}"
     state: directory
     owner: 10001

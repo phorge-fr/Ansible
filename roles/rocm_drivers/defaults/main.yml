@@ -1,4 +1,4 @@
 ---
 # Default ROCm version
-rocm_version: "7.1"
-ubuntu_codename: "noble"
+rocm_drivers_version: "7.1"
+rocm_drivers_ubuntu_codename: "noble"

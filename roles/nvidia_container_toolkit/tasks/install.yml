@@ -5,7 +5,7 @@
       - curl
       - gnupg
     state: present
-    update_cache: yes
+    update_cache: true
 
 - name: Add NVIDIA GPG key
   ansible.builtin.apt_key:
@@ -21,10 +21,8 @@
     owner: root
     group: root
     mode: '0644'
-    force: no
+    force: false
   become: true
-  args:
-    creates: /etc/apt/sources.list.d/nvidia-container-toolkit.list
 
 - name: Ensure NVIDIA repository has signed-by clause
   ansible.builtin.replace:
@@ -35,7 +33,7 @@
 
 - name: Update package cache
   ansible.builtin.apt:
-    update_cache: yes
+    update_cache: true
 
 - name: Install NVIDIA Container Toolkit packages
   ansible.builtin.apt:
@@ -45,6 +43,5 @@
       - "libnvidia-container-tools={{ nvidia_container_toolkit_version }}"
       - "libnvidia-container1={{ nvidia_container_toolkit_version }}"
     state: present
-  register: nvidia_packages_install
+  register: nvidia_container_toolkit_packages_install
   notify: Configure Docker to use NVIDIA Container Runtime as default
-

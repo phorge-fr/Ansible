@@ -1,3 +1,4 @@
-skip_list:
-  - yaml
-  - trailing-spaces
+exclude_paths:
+  - collections/
+  - roles/geerlingguy.nfs/
+  - roles/rolehippie.mdadm/

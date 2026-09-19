@@ -12,7 +12,9 @@ mdadm_arrays:
       - /dev/nvme2n1
       - /dev/nvme3n1
 
-nfs_exports: [ "/mnt/main/csi-svc 10.3.0.1(rw,sync,no_subtree_check) 10.3.0.2(rw,sync,no_subtree_check) 10.3.0.3(rw,sync,no_subtree_check)" ]
+nfs_exports:
+  # yamllint disable-line rule:line-length
+  - "/mnt/main/csi-svc 10.3.0.1(rw,sync,no_subtree_check,no_root_squash) 10.3.0.2(rw,sync,no_subtree_check,no_root_squash) 10.3.0.3(rw,sync,no_subtree_check,no_root_squash)"
 
 rustfs_config:
   version: "latest"

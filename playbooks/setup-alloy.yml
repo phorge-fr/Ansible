@@ -2,6 +2,39 @@
 - name: Install Alloy
   hosts: all
   become: true
+  pre_tasks:
+    - name: Create the directory of the core CA
+      ansible.builtin.file:
+        path: /etc/alloy-ca
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: alloy_ca_cert is defined
+
+    - name: Install the core CA
+      ansible.builtin.copy:
+        content: "{{ alloy_ca_cert }}"
+        dest: /etc/alloy-ca/ca.crt
+        owner: root
+        group: root
+        mode: "0644"
+      when: alloy_ca_cert is defined
+
+    - name: Store the Alloy credentials
+      ansible.builtin.copy:
+        content: |
+          ALLOY_BASIC_AUTH_USERNAME={{ alloy_basic_auth_username }}
+          ALLOY_PROMETHEUS_BASIC_AUTH_PASSWORD="{{ alloy_prometheus_basic_auth_password }}"
+          ALLOY_LOKI_BASIC_AUTH_PASSWORD="{{ alloy_loki_basic_auth_password }}"
+        dest: /etc/alloy-secrets.env
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+      when:
+        - alloy_prometheus_basic_auth_password is defined
+        - alloy_loki_basic_auth_password is defined
   tasks:
     - name: Install Alloy
       ansible.builtin.include_role:

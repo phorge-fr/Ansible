@@ -31,9 +31,11 @@ docs/                     # manual procedures not yet automated
 | `compute` | `comp-opti-01` to `03` | none, see [docs/incus-installation.md](docs/incus-installation.md) | none |
 | `all` | every host | `setup-alloy.yml` | `grafana.grafana.alloy` |
 | `all` | every host | `setup-hardening.yml` | `ssh_hardening` |
-| `all` | every host | `setup-firewall.yml` (one node at a time, `audit` mode by default) | `firewall` |
+| `all` | every host | `setup-firewall.yml` (one node at a time, `enforce` on `control`, `core`, `svc` and `storage`, `audit` elsewhere) | `firewall` |
 
 `setup-alloy.yml` reads `alloy_config` from `group_vars`. Only `storage` and `compute` define it today, the other groups fall back to the role default (empty configuration).
+
+The `storage` configuration is [playbooks/files/alloy-storage.alloy](playbooks/files/alloy-storage.alloy): host and container metrics to Prometheus, container and journal logs to Loki, both on `core` over HTTPS with the core CA and basic auth. The credentials are vault values of the `storage` group vars, written to `/etc/alloy-secrets.env` (mode `0600`) and read by the service through the environment.
 
 ## Roles
 

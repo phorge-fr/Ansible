@@ -1,0 +1,154 @@
+// Alloy on the storage node: host and container metrics, container and journal logs.
+// Same endpoints, CA and basic auth pattern as the k0s clusters (FrontPlane, base/controllers/alloy).
+// The credentials come from /etc/alloy-secrets.env. Prometheus and Loki have their own password for this user.
+
+prometheus.remote_write "core" {
+  endpoint {
+    url = "https://prometheus.core.phorge/api/v1/write"
+
+    basic_auth {
+      username = sys.env("ALLOY_BASIC_AUTH_USERNAME")
+      password = sys.env("ALLOY_PROMETHEUS_BASIC_AUTH_PASSWORD")
+    }
+
+    tls_config {
+      ca_file = "/etc/alloy-ca/ca.crt"
+    }
+  }
+
+  external_labels = {
+    cluster = "stor",
+  }
+}
+
+loki.write "core" {
+  endpoint {
+    url = "https://loki.core.phorge/loki/api/v1/push"
+
+    basic_auth {
+      username = sys.env("ALLOY_BASIC_AUTH_USERNAME")
+      password = sys.env("ALLOY_LOKI_BASIC_AUTH_PASSWORD")
+    }
+
+    tls_config {
+      ca_file = "/etc/alloy-ca/ca.crt"
+    }
+  }
+
+  external_labels = {
+    cluster = "stor",
+  }
+}
+
+// Host metrics
+
+// The nvme collector fails on this kernel (unreadable /sys/class/nvme/*/nuse) and logs an error at every scrape.
+prometheus.exporter.unix "node" {
+  disable_collectors = ["nvme"]
+}
+
+discovery.relabel "node" {
+  targets = prometheus.exporter.unix.node.targets
+
+  rule {
+    target_label = "job"
+    replacement  = "node-exporter"
+  }
+  rule {
+    target_label = "instance"
+    replacement  = constants.hostname
+  }
+}
+
+prometheus.scrape "node" {
+  job_name   = "node-exporter"
+  targets    = discovery.relabel.node.output
+  forward_to = [prometheus.remote_write.core.receiver]
+}
+
+// Container metrics
+
+prometheus.exporter.cadvisor "docker" {
+  docker_host = "unix:///var/run/docker.sock"
+  docker_only = true
+}
+
+discovery.relabel "cadvisor" {
+  targets = prometheus.exporter.cadvisor.docker.targets
+
+  rule {
+    target_label = "job"
+    replacement  = "cadvisor"
+  }
+  rule {
+    target_label = "instance"
+    replacement  = constants.hostname
+  }
+}
+
+prometheus.scrape "cadvisor" {
+  job_name   = "cadvisor"
+  targets    = discovery.relabel.cadvisor.output
+  forward_to = [prometheus.remote_write.core.receiver]
+}
+
+// Container logs
+
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "container_logs" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+  rule {
+    target_label = "instance"
+    replacement  = constants.hostname
+  }
+}
+
+loki.source.docker "containers" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.docker.containers.targets
+  relabel_rules = discovery.relabel.container_logs.rules
+  labels        = {"job" = "docker"}
+  forward_to    = [loki.write.core.receiver]
+}
+
+// Host logs (journal)
+
+loki.relabel "journal" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+  rule {
+    source_labels = ["__journal__hostname"]
+    target_label  = "instance"
+  }
+}
+
+loki.source.journal "host" {
+  relabel_rules = loki.relabel.journal.rules
+  forward_to    = [loki.process.journal.receiver]
+}
+
+// loki.source.journal sets job to its component ID and ignores it in labels, so set it here.
+loki.process "journal" {
+  stage.static_labels {
+    values = {"job" = "journal"}
+  }
+
+  forward_to = [loki.write.core.receiver]
+}

@@ -1,0 +1,235 @@
+// Alloy on the compute nodes (Incus + Ceph + OVN): host metrics, Incus metrics, Ceph metrics, journal and service logs.
+// Same endpoints, CA and basic auth pattern as the k0s clusters (FrontPlane, base/controllers/alloy) and the storage node.
+// The credentials come from /etc/alloy-secrets.env. Prometheus and Loki have their own password for this user.
+//
+// Every node runs this same config and monitors itself, so losing one node (or one Alloy) never blinds the others.
+// The price is that anything that is cluster-wide could be reported three times. Each such case is handled explicitly:
+//   - Incus metrics: every node scrapes its OWN Incus endpoint (per-instance and per-node series are local to it).
+//     The series that Incus computes cluster-wide (project resources, storage pools, operations) are dropped, since
+//     they would come back identical from all three nodes; Ceph already reports the pool usage.
+//     incus_warnings_total is cluster-wide too and is kept from every node on purpose: use max without (instance).
+//   - Ceph metrics: only the ACTIVE mgr listens on its Prometheus port (checked live: the standbys don't open :9283
+//     at all), so scraping the local mgr on every node yields exactly one copy, and the copy follows the active mgr
+//     when it fails over. The two standby nodes therefore report up{job="ceph-mgr"} == 0 and log a "connection
+//     refused" scrape error every interval: expected, not a fault. Alert on the absence of ceph_health_status (no
+//     active mgr) or on max(up{job="ceph-mgr"}) == 0, never on a single instance.
+//   - Ceph cluster and audit logs: every mon writes its own identical copy of these two files. They are sent WITHOUT
+//     the instance label, so the three copies land in the same stream with the same timestamps and lines, which Loki
+//     ignores as duplicates. Daemon logs are read from the journal only, never from /var/log/ceph twice.
+//   - Incus native Loki logger (configured in Incus itself, not here): each member sends only its own events, and it
+//     only sends lifecycle and network-acl events, since the daemon logs already come from the journal below.
+
+prometheus.remote_write "core" {
+  endpoint {
+    url = "https://prometheus.core.phorge/api/v1/write"
+
+    basic_auth {
+      username = sys.env("ALLOY_BASIC_AUTH_USERNAME")
+      password = sys.env("ALLOY_PROMETHEUS_BASIC_AUTH_PASSWORD")
+    }
+
+    tls_config {
+      ca_file = "/etc/alloy-ca/ca.crt"
+    }
+  }
+
+  external_labels = {
+    cluster = "comp",
+  }
+}
+
+loki.write "core" {
+  endpoint {
+    url = "https://loki.core.phorge/loki/api/v1/push"
+
+    basic_auth {
+      username = sys.env("ALLOY_BASIC_AUTH_USERNAME")
+      password = sys.env("ALLOY_LOKI_BASIC_AUTH_PASSWORD")
+    }
+
+    tls_config {
+      ca_file = "/etc/alloy-ca/ca.crt"
+    }
+  }
+
+  external_labels = {
+    cluster = "comp",
+  }
+}
+
+// Host metrics
+
+// Virtual interfaces come and go with every instance (tap, veth, OVN ports): leaving them in would make the
+// cardinality grow with the number of instances. Per-instance network figures come from the Incus metrics instead.
+prometheus.exporter.unix "node" {
+  enable_collectors = ["systemd"]
+
+  systemd {
+    unit_include = "(ceph-.+|incus.*|ovn-.+|ovs.+|openvswitch.*|ovsdb.+|alloy|ssh|chrony|systemd-timesyncd|networking|nftables)\\.(service|socket|target)"
+  }
+
+  netdev {
+    device_exclude = "^(lo|veth.+|tap.+|vnet.+|genev_sys_.+|ovs-system|br-int|incusovn.+)$"
+  }
+
+  netclass {
+    ignored_devices = "^(lo|veth.+|tap.+|vnet.+|genev_sys_.+|ovs-system|br-int|incusovn.+)$"
+  }
+
+  filesystem {
+    mount_points_exclude = "^/(dev|proc|run/credentials/.+|run/incus/.+|sys|var/lib/incus/.+|var/lib/ceph/osd/.+)($|/)"
+  }
+}
+
+discovery.relabel "node" {
+  targets = prometheus.exporter.unix.node.targets
+
+  rule {
+    target_label = "job"
+    replacement  = "node-exporter"
+  }
+  rule {
+    target_label = "instance"
+    replacement  = constants.hostname
+  }
+}
+
+prometheus.scrape "node" {
+  job_name   = "node-exporter"
+  targets    = discovery.relabel.node.output
+  forward_to = [prometheus.remote_write.core.receiver]
+}
+
+// Incus metrics (this node's own endpoint: core.metrics_address, ALLOY_INCUS_METRICS_ADDRESS from alloy_extra_env)
+
+discovery.relabel "incus" {
+  targets = [{"__address__" = sys.env("ALLOY_INCUS_METRICS_ADDRESS")}]
+
+  rule {
+    target_label = "job"
+    replacement  = "incus"
+  }
+  rule {
+    target_label = "instance"
+    replacement  = constants.hostname
+  }
+}
+
+// The endpoint is the node's own address on the private east-west VLAN, while its certificate is the public one for
+// iaas.phorge.fr (ACME), so it can never match by address. Not worth failing the scrape over: the certificate or its
+// chain changing at renewal would otherwise silently cut the metrics.
+prometheus.scrape "incus" {
+  job_name     = "incus"
+  targets      = discovery.relabel.incus.output
+  scheme       = "https"
+  metrics_path = "/1.0/metrics"
+
+  tls_config {
+    insecure_skip_verify = true
+  }
+
+  forward_to = [prometheus.relabel.incus.receiver]
+}
+
+prometheus.relabel "incus" {
+  forward_to = [prometheus.remote_write.core.receiver]
+
+  // Cluster-wide series, identical on the three nodes.
+  rule {
+    source_labels = ["__name__"]
+    regex         = "incus_(project_resources_total|operations_total|storage_pool_.+)"
+    action        = "drop"
+  }
+
+  // Go runtime internals: keep the few that show a leak or a stuck daemon.
+  rule {
+    source_labels = ["__name__"]
+    regex         = "incus_go_(alloc_bytes|alloc_bytes_total|buck_hash_sys_bytes|frees_total|gc_sys_bytes|heap_idle_bytes|heap_inuse_bytes|heap_objects|heap_released_bytes|heap_sys_bytes|lookups_total|mallocs_total|mcache_.+|mspan_.+|next_gc_bytes|other_sys_bytes|stack_.+)"
+    action        = "drop"
+  }
+}
+
+// Ceph metrics (mgr Prometheus module, active mgr only, see the header)
+
+discovery.relabel "ceph_mgr" {
+  targets = [{"__address__" = "127.0.0.1:9283"}]
+
+  rule {
+    target_label = "job"
+    replacement  = "ceph-mgr"
+  }
+  rule {
+    target_label = "instance"
+    replacement  = constants.hostname
+  }
+}
+
+prometheus.scrape "ceph_mgr" {
+  job_name        = "ceph-mgr"
+  targets         = discovery.relabel.ceph_mgr.output
+  scrape_interval = "30s"
+  scrape_timeout  = "20s"
+  forward_to      = [prometheus.remote_write.core.receiver]
+}
+
+// Journal: every unit of this node (incus, ceph-mon/mgr/osd, ovn-*, openvswitch, ssh, ...)
+
+loki.relabel "journal" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+  rule {
+    source_labels = ["__journal__hostname"]
+    target_label  = "instance"
+  }
+}
+
+loki.source.journal "host" {
+  relabel_rules = loki.relabel.journal.rules
+  forward_to    = [loki.process.journal.receiver]
+}
+
+// loki.source.journal sets job to its component ID and ignores it in labels, so set it here.
+loki.process "journal" {
+  stage.static_labels {
+    values = {"job" = "journal"}
+  }
+
+  forward_to = [loki.write.core.receiver]
+}
+
+// OVN and Open vSwitch log to files only. Node-local, so they carry the instance label.
+
+local.file_match "network" {
+  path_targets = [
+    {"__path__" = "/var/log/ovn/*.log", "job" = "ovn", "instance" = constants.hostname},
+    {"__path__" = "/var/log/openvswitch/*.log", "job" = "openvswitch", "instance" = constants.hostname},
+  ]
+}
+
+loki.source.file "network" {
+  targets    = local.file_match.network.targets
+  forward_to = [loki.write.core.receiver]
+}
+
+// Ceph cluster log and audit log: written identically by each of the three mons. No instance label on purpose, so
+// the copies collapse into one stream (see the header).
+
+local.file_match "ceph_cluster" {
+  path_targets = [
+    {"__path__" = "/var/log/ceph/ceph.log", "job" = "ceph-cluster-log"},
+    {"__path__" = "/var/log/ceph/ceph.audit.log", "job" = "ceph-audit-log"},
+  ]
+}
+
+loki.source.file "ceph_cluster" {
+  targets    = local.file_match.ceph_cluster.targets
+  forward_to = [loki.write.core.receiver]
+}

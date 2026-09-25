@@ -27,6 +27,9 @@
           ALLOY_BASIC_AUTH_USERNAME={{ alloy_basic_auth_username }}
           ALLOY_PROMETHEUS_BASIC_AUTH_PASSWORD="{{ alloy_prometheus_basic_auth_password }}"
           ALLOY_LOKI_BASIC_AUTH_PASSWORD="{{ alloy_loki_basic_auth_password }}"
+          {% for name, value in (alloy_extra_env | default({})).items() %}
+          {{ name }}="{{ value }}"
+          {% endfor %}
         dest: /etc/alloy-secrets.env
         owner: root
         group: root

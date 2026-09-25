@@ -1,0 +1,281 @@
+---
+# lxc.incus.incus's incus_init.config only ever gets applied on the run where
+# the incus package transitions from absent to present (see the note in
+# group_vars/compute.yml and docs/incus-installation.md) - it's a one-shot
+# bootstrap, not a reconciler. Once the cluster is up, day-2 changes to
+# incus_init_shared_config/incus_init_node_config (a new key, a changed
+# value) go through this playbook instead of re-running setup-compute.yml.
+#
+# Two different scopes, handled differently on purpose:
+# - incus_init_shared_config is cluster-wide (acme.*, oidc.*, logging.*,
+#   cluster.*, user.*) - setting it from ANY single member propagates to the
+#   whole cluster through Incus's own clustered database, so this only
+#   touches one node (run_once). Doing this per-host instead would have all
+#   3 nodes racing to fire the same change concurrently - for acme.* in
+#   particular, that would mean 3 concurrent Let's Encrypt/lego runs for the
+#   same domain instead of one.
+# - incus_init_node_config is per-member (core.bgp_address, core.bgp_routerid,
+#   core.metrics_address - each host_vars sets its own IP) - the local incus
+#   CLI on each node scopes these to itself with no --target needed, exactly
+#   like lxc.incus.incus's own "Apply additional configuration" handler did
+#   during the original bootstrap, so this genuinely runs on every host.
+# Play 1 is separate because it restarts incusd, which has to happen one node
+# at a time (serial: 1) - and serial would make run_once in play 2 run once
+# per batch instead of once overall.
+- name: Compute - Trust core's local root CA (rolling)
+  hosts: compute
+  become: true
+  serial: 1
+  tasks:
+    - name: Trust core's local root CA on the node
+      ansible.builtin.include_tasks: tasks/trust-core-ca.yml
+
+# Same reason as above (restarts, one node at a time): the Ceph mgr modules are all broken on Debian 13 until the
+# bcrypt stand-in is in place, see playbooks/tasks/ceph-mgr-bcrypt-shim.yml.
+- name: Compute - Fix the Ceph mgr modules (rolling)
+  hosts: compute
+  become: true
+  serial: 1
+  tasks:
+    - name: Install the bcrypt stand-in for the Ceph mgr
+      ansible.builtin.include_tasks: tasks/ceph-mgr-bcrypt-shim.yml
+
+- name: Compute - Apply day-2 Incus cluster config changes
+  hosts: compute
+  become: true
+  # Pinned explicitly: the shared-config tasks below rely on run_once
+  # actually meaning "only one host ever runs this", which the "free"
+  # strategy doesn't guarantee (hosts race ahead independently) - "linear"
+  # is already ansible-core's own default, this just makes it non-negotiable
+  # for this play.
+  strategy: linear
+  tasks:
+    - name: Read the current value of each shared (cluster-wide) Incus config key  # noqa: run-once[task]
+      ansible.builtin.command:
+        argv:
+          - incus
+          - config
+          - get
+          - "{{ item.key }}"
+      loop: "{{ incus_init_shared_config | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      register: compute_incus_shared_current
+      changed_when: false
+      failed_when: false
+      run_once: true
+
+    # Order matters for the acme.* keys (see the comment in
+    # group_vars/compute.yml: acme.email must be applied last, since setting
+    # it is what actually triggers the live Let's Encrypt registration/DNS-01
+    # challenge) - incus_init_shared_config's own insertion order is
+    # preserved by dict2items, so looping over compute_incus_shared_current's
+    # results (built from that same loop, in the same order) keeps it.
+    # Not argv: passing key and value as two separate arguments hits Incus's
+    # "instance config set" parsing path instead of "server config set" as
+    # soon as the value itself contains an "=" (e.g. acme.provider.environment,
+    # "CLOUDFLARE_DNS_API_TOKEN=...") - Incus then reads the key as an
+    # instance name and fails with "Instance not found". The combined
+    # key="value" form is also what lxc.incus.incus's own handler uses
+    # (roles/incus/handlers/installation.yml).
+    - name: Apply any shared Incus config key that doesn't already match  # noqa: run-once[task]
+      ansible.builtin.command: "incus config set {{ item.item.key }}=\"{{ item.item.value }}\""
+      loop: "{{ compute_incus_shared_current.results }}"
+      loop_control:
+        label: "{{ item.item.key }}"
+      when: (item.stdout | default('') | trim) != (item.item.value | string | trim)
+      changed_when: true
+      run_once: true
+
+    - name: Read the current value of each of this node's own config keys
+      ansible.builtin.command:
+        argv:
+          - incus
+          - config
+          - get
+          - "{{ item.key }}"
+      loop: "{{ incus_init_node_config | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      register: compute_incus_node_current
+      changed_when: false
+      failed_when: false
+
+    - name: Apply any of this node's own config keys that doesn't already match
+      ansible.builtin.command: "incus config set {{ item.item.key }}=\"{{ item.item.value }}\""
+      loop: "{{ compute_incus_node_current.results }}"
+      loop_control:
+        label: "{{ item.item.key }}"
+      when: (item.stdout | default('') | trim) != (item.item.value | string | trim)
+      changed_when: true
+
+    # ---- OpenFGA authorization -------------------------------------------
+    # Store: created here (not in setup-compute.yml) because it has to exist
+    # before the three authorization.openfga.* keys can be set, and those
+    # have to be set together, in a single `incus config set` - Incus loads
+    # the authorizer as soon as it has a complete configuration.
+    - name: List the OpenFGA stores  # noqa: run-once[task]
+      ansible.builtin.uri:
+        url: "{{ incus_openfga_url }}/stores"
+        headers:
+          Authorization: "Bearer {{ incus_openfga_api_token }}"
+        ca_path: "{{ playbook_dir }}/files/alloy-ca.crt"
+        return_content: true
+      delegate_to: 127.0.0.1
+      become: false
+      run_once: true
+      register: compute_openfga_stores
+
+    # OpenFGA doesn't enforce unique store names, so only create when the
+    # name is absent - never blindly.
+    - name: Create the dedicated OpenFGA store when there is none  # noqa: run-once[task]
+      ansible.builtin.uri:
+        url: "{{ incus_openfga_url }}/stores"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ incus_openfga_api_token }}"
+        ca_path: "{{ playbook_dir }}/files/alloy-ca.crt"
+        body_format: json
+        body:
+          name: "{{ incus_openfga_store_name }}"
+        status_code: 201
+        return_content: true
+      delegate_to: 127.0.0.1
+      become: false
+      run_once: true
+      when: incus_openfga_store_name not in (compute_openfga_stores.json.stores | map(attribute='name') | list)
+      changed_when: true
+      register: compute_openfga_store_created
+
+    # run_once + set_fact applies the fact to every host in the play.
+    - name: Record the OpenFGA store id  # noqa: run-once[task]
+      ansible.builtin.set_fact:
+        incus_openfga_store_id: >-
+          {{ compute_openfga_store_created.json.id
+             if compute_openfga_store_created is not skipped
+             else (compute_openfga_stores.json.stores
+                   | selectattr('name', 'equalto', incus_openfga_store_name)
+                   | map(attribute='id') | first) }}
+      run_once: true
+
+    - name: Read the OpenFGA store id currently set on Incus  # noqa: run-once[task]
+      ansible.builtin.command: incus config get authorization.openfga.store.id
+      register: compute_incus_openfga_current
+      changed_when: false
+      run_once: true
+
+    - name: Enable OpenFGA authorization on Incus  # noqa: run-once[task]
+      ansible.builtin.command: >-
+        incus config set
+        authorization.openfga.api.url="{{ incus_openfga_url }}"
+        authorization.openfga.api.token="{{ incus_openfga_api_token }}"
+        authorization.openfga.store.id="{{ incus_openfga_store_id }}"
+      when: (compute_incus_openfga_current.stdout | trim) != incus_openfga_store_id
+      changed_when: true
+      no_log: true
+      run_once: true
+
+    # Incus writes its authorization model into the store when it loads the
+    # authorizer - reading a tuple of type server before that returns a 400
+    # (unknown type), hence the retries.
+    - name: Check which admin grants already exist  # noqa: run-once[task]
+      ansible.builtin.uri:
+        url: "{{ incus_openfga_url }}/stores/{{ incus_openfga_store_id }}/read"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ incus_openfga_api_token }}"
+        ca_path: "{{ playbook_dir }}/files/alloy-ca.crt"
+        body_format: json
+        body:
+          tuple_key:
+            user: "user:{{ item }}"
+            relation: admin
+            object: server:incus
+        status_code: [200, 400]
+        return_content: true
+      loop: "{{ incus_openfga_admins }}"
+      delegate_to: 127.0.0.1
+      become: false
+      run_once: true
+      register: compute_openfga_admin_grants
+      until: compute_openfga_admin_grants.status == 200
+      retries: 12
+      delay: 5
+
+    - name: Grant admin on the Incus server to the configured users  # noqa: run-once[task]
+      ansible.builtin.uri:
+        url: "{{ incus_openfga_url }}/stores/{{ incus_openfga_store_id }}/write"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ incus_openfga_api_token }}"
+        ca_path: "{{ playbook_dir }}/files/alloy-ca.crt"
+        body_format: json
+        body:
+          writes:
+            tuple_keys:
+              - user: "user:{{ item.item }}"
+                relation: admin
+                object: server:incus
+      loop: "{{ compute_openfga_admin_grants.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      delegate_to: 127.0.0.1
+      become: false
+      run_once: true
+      when: item.json.tuples | default([]) | length == 0
+      changed_when: true
+
+    # ---- Ceph metrics ----------------------------------------------------
+    # The mgr Prometheus module only serves metrics from the ACTIVE mgr (a standby answers an empty 200), which is
+    # what lets every node's Alloy scrape its local mgr without producing three copies, see alloy-compute.alloy.
+    - name: Enable the Ceph mgr Prometheus module  # noqa: run-once[task]
+      ansible.builtin.command: ceph mgr module enable prometheus
+      register: compute_ceph_prometheus
+      changed_when: "'already enabled' not in compute_ceph_prometheus.stdout + compute_ceph_prometheus.stderr"
+      run_once: true
+
+    - name: Wait for the Prometheus module to be serving  # noqa: run-once[task]
+      ansible.builtin.command: ceph mgr services --format json
+      register: compute_ceph_mgr_services
+      until: >-
+        compute_ceph_mgr_services.rc == 0 and
+        'prometheus' in (compute_ceph_mgr_services.stdout | from_json)
+      retries: 12
+      delay: 5
+      changed_when: false
+      run_once: true
+
+    - name: Read the current Ceph mgr options  # noqa: run-once[task]
+      ansible.builtin.command: "ceph config get mgr {{ item.key }}"
+      loop: "{{ ceph_mgr_config | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      register: compute_ceph_mgr_current
+      changed_when: false
+      run_once: true
+
+    - name: Apply the Ceph mgr options that differ  # noqa: run-once[task]
+      ansible.builtin.command: "ceph config set mgr {{ item.item.key }} {{ item.item.value }}"
+      loop: "{{ compute_ceph_mgr_current.results }}"
+      loop_control:
+        label: "{{ item.item.key }}"
+      when: (item.stdout | trim) != (item.item.value | string)
+      changed_when: true
+      run_once: true
+
+    - name: Disable the Ceph mgr modules that cannot run on this build  # noqa: run-once[task]
+      ansible.builtin.command: "ceph mgr module disable {{ item }}"
+      loop: "{{ ceph_mgr_modules_disabled }}"
+      register: compute_ceph_mgr_disable
+      changed_when: "'already disabled' not in compute_ceph_mgr_disable.stdout + compute_ceph_mgr_disable.stderr"
+      run_once: true
+
+    # The fix is only real if the warning is gone: fail loudly here rather than leave a silent permanent HEALTH_WARN.
+    - name: Check that no Ceph mgr module has a failed dependency any more  # noqa: run-once[task]
+      ansible.builtin.command: ceph health detail --format json
+      register: compute_ceph_health
+      until: "'MGR_MODULE_DEPENDENCY' not in (compute_ceph_health.stdout | from_json).checks"
+      retries: 12
+      delay: 10
+      changed_when: false
+      run_once: true

@@ -1,0 +1,138 @@
+---
+- name: Compute - Tear down Incus/Ceph/OVN back to a clean node
+  hosts: compute
+  become: true
+  tasks:
+    - name: Refuse to run without explicit confirmation
+      ansible.builtin.assert:
+        that: teardown_confirm | default(false) | bool
+        fail_msg: >-
+          Re-run with -e teardown_confirm=true. This destroys the Incus cluster,
+          all instances, the Ceph pool and every OSD's data.
+
+    - name: Stop and disable the Incus units
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop:
+        - incus.service
+        - incus.socket
+        - incus-startup.service
+      failed_when: false
+
+    - name: Stop and disable the Ceph mon and mgr units
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop:
+        - "ceph-mon@{{ inventory_hostname_short }}.service"
+        - "ceph-mgr@{{ inventory_hostname_short }}.service"
+      failed_when: false
+
+    - name: Stop and disable the Ceph OSDs
+      ansible.builtin.systemd:
+        name: ceph-osd.target
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    - name: Unmount any Ceph OSD tmpfs left behind after stopping the OSDs
+      # A live `mount` check, not the ansible_mounts fact gathered once at
+      # play start: that fact didn't reliably reflect this tmpfs in testing.
+      ansible.builtin.shell: |
+        set -o pipefail
+        mount | awk '$3 ~ "^/var/lib/ceph/osd/" {print $3}' | xargs --no-run-if-empty umount
+      args:
+        executable: /bin/bash
+      failed_when: false
+      changed_when: true
+
+    - name: Zap the Ceph OSD disks (wipes LVM and Ceph signatures, returns the raw disk)
+      ansible.builtin.command: "ceph-volume lvm zap --destroy /dev/disk/by-id/{{ item.data }}"
+      loop: "{{ ceph_disks | default([]) }}"
+      failed_when: false
+      changed_when: true
+
+    - name: Wipe any LVM/filesystem signature left on the OSD disks
+      # ceph-volume lvm zap --destroy has been observed to leave the
+      # LVM2_member signature in place (e.g. when it can't fully close the PV
+      # while the OSD's tmpfs is still settling) - use wipefs directly as a
+      # belt-and-suspenders pass. wipefs is util-linux, not ceph-volume/lvm2,
+      # so it still works even after the packages above are purged.
+      ansible.builtin.command: "wipefs --all /dev/disk/by-id/{{ item.data }}"
+      loop: "{{ ceph_disks | default([]) }}"
+      failed_when: false
+      changed_when: true
+
+    - name: Stop and disable OVN and Open vSwitch units
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop:
+        - ovn-central.service
+        - ovn-controller.service
+        - openvswitch-switch.service
+      failed_when: false
+
+    - name: Remove the Zabbly repository before purging (so a stale/unreachable third-party repo can't block it)
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/etc/apt/sources.list.d/ansible-zabbly-incus-{{ incus_release }}.sources"
+        - /etc/apt/keyrings/ansible-zabbly.asc
+
+    - name: Purge the Incus, Ceph and OVN packages
+      ansible.builtin.apt:
+        name:
+          - incus
+          - incus-base
+          - incus-ui-canonical
+          - ceph-common
+          - ceph-base
+          - ceph-mon
+          - ceph-mgr
+          - ceph-osd
+          - ceph-volume
+          - ovn-central
+          - ovn-host
+          - openvswitch-switch
+        state: absent
+        purge: true
+        autoremove: true
+        update_cache: true
+
+    - name: Unmount any Ceph OSD tmpfs remounted while purging the packages
+      # Purging ceph-osd (postrm/udev) has been observed to remount this
+      # tmpfs after the earlier unmount above - check again right before
+      # removing the directory tree, or the removal fails with "device or
+      # resource busy".
+      ansible.builtin.shell: |
+        set -o pipefail
+        mount | awk '$3 ~ "^/var/lib/ceph/osd/" {print $3}' | xargs --no-run-if-empty umount
+      args:
+        executable: /bin/bash
+      failed_when: false
+      changed_when: true
+
+    - name: Remove leftover state directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /var/lib/incus
+        - /etc/incus
+        - /var/lib/ceph
+        - /etc/ceph
+        # left behind by the packages' purge: the bcrypt stand-in for the mgr (playbooks/tasks/ceph-mgr-bcrypt-shim.yml)
+        - /usr/share/ceph
+        - /var/lib/ovn
+        - /etc/ovn
+        - /etc/openvswitch
+
+    - name: Reboot to clear any loaded Open vSwitch/LVM state
+      ansible.builtin.reboot:
+        reboot_timeout: 300

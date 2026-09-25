@@ -1,0 +1,41 @@
+---
+# The core ingresses (openfga.core.phorge, loki.core.phorge) are signed by
+# core's local root CA (CN=local-root-ca, same certificate as alloy-ca.crt),
+# which no node trusts by default. Incus's Loki logger has its own
+# target.ca_cert option, but its OpenFGA client has none - it verifies
+# against the system trust store, so the CA has to live there.
+- name: Install core's local root CA into the system trust store
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/files/alloy-ca.crt"
+    dest: /usr/local/share/ca-certificates/phorge-local-root-ca.crt
+    mode: "0644"
+  register: compute_core_ca
+
+- name: Refresh the system trust store
+  ansible.builtin.command: update-ca-certificates
+  when: compute_core_ca.changed  # noqa: no-handler
+  changed_when: true
+
+- name: Check whether Incus is installed yet
+  ansible.builtin.stat:
+    path: /opt/incus/bin/incusd
+  register: compute_incusd
+
+# Go reads the system roots once per process, so an already-running incusd
+# won't see the new CA until it restarts. Instances keep running across a
+# daemon restart. Skipped on a fresh node (Incus isn't installed yet, it will
+# start with the CA already in place).
+- name: Restart Incus so it picks up the new trust store
+  ansible.builtin.systemd:
+    name: incus
+    state: restarted
+  when: compute_core_ca.changed and compute_incusd.stat.exists  # noqa: no-handler
+
+- name: Wait for Incus to answer again
+  ansible.builtin.command: incus info
+  register: compute_incus_back
+  until: compute_incus_back.rc == 0
+  retries: 12
+  delay: 5
+  changed_when: false
+  when: compute_core_ca.changed and compute_incusd.stat.exists  # noqa: no-handler

@@ -1,0 +1,348 @@
+---
+- name: Compute - Deploy the Incus HA cluster
+  hosts: compute
+  become: true
+  pre_tasks:
+    # lxc.incus's "Add networks"/"Add storage pools" tasks use the
+    # community.general.json_query filter, which needs the jmespath Python
+    # library on the CONTROLLER (not the managed nodes). Install it there
+    # once, before anything else needs it.
+    - name: Ensure jmespath is available on the controller for json_query
+      ansible.builtin.pip:
+        name: jmespath
+        state: present
+      delegate_to: localhost
+      become: false
+
+    # These nodes were never given a DNS resolver in their original (manual,
+    # pre-Ansible) static network setup - /etc/resolv.conf is empty, so apt
+    # can't resolve deb.debian.org. Point them at the router, the same way
+    # every other VLAN's gateway already doubles as a DNS forwarder.
+    - name: Ensure the node can resolve names before anything tries to use apt
+      when: ansible_default_ipv4.gateway is defined
+      block:
+        - name: Install resolvconf
+          ansible.builtin.apt:
+            name: resolvconf
+            state: present
+            update_cache: true
+          register: compute_resolvconf_install
+          # This one task DOES need a working resolver already (to fetch the
+          # package) - on a node with truly no DNS at all and no cached
+          # package, this still needs the one-time fix from
+          # docs/incus-installation.md. Every node in this group already has
+          # it, so this is just making it durable/reproducible from here on.
+
+        - name: Add the gateway as a DNS server in the static interface config
+          ansible.builtin.lineinfile:
+            path: /etc/network/interfaces
+            line: "dns-nameservers {{ ansible_default_ipv4.gateway }}"
+            insertafter: "^gateway {{ ansible_default_ipv4.gateway }}$"
+
+        - name: Check whether the resolver already has the gateway nameserver
+          ansible.builtin.command: "grep -qxF 'nameserver {{ ansible_default_ipv4.gateway }}' /etc/resolv.conf"
+          register: compute_resolv_check
+          changed_when: false
+          failed_when: false
+
+        - name: Feed the nameserver to resolvconf immediately (no reboot needed)
+          ansible.builtin.command: "resolvconf -a {{ ansible_default_ipv4.interface }}.inet"
+          args:
+            stdin: "nameserver {{ ansible_default_ipv4.gateway }}"
+          when: compute_resolv_check.rc != 0
+          changed_when: true
+
+    # lxc.incus delegates some tasks/handlers to the controller under two
+    # different names - 127.0.0.1 (ceph/ovn key generation) and localhost (the
+    # incus role's own "wait for join token" handler) - both need become
+    # disabled, since Ansible tracks connection vars per delegated host name,
+    # not per actual machine.
+    - name: Disable become for tasks delegated to the controller
+      ansible.builtin.set_fact:
+        ansible_become: false
+      delegate_to: "{{ item }}"
+      delegate_facts: true
+      loop:
+        - 127.0.0.1
+        - localhost
+
+    # ansible_play_hosts shrinks as hosts fail during the play - re-evaluating
+    # `ansible_play_hosts | sort | first` after the original bootstrap host
+    # fails a task later on would silently re-elect a different host and have
+    # it redundantly repeat bootstrap-only steps below (observed: the OpenFGA
+    # store lookup failing on the bootstrap node caused the next node to be
+    # re-elected and retry it too). Capture the bootstrap hostname once, while
+    # every host is still healthy, and use this fixed value everywhere below
+    # instead of re-deriving it.
+    - name: Elect a stable bootstrap host for this run
+      ansible.builtin.set_fact:
+        compute_bootstrap_host: "{{ ansible_play_hosts | sort | first }}"
+      delegate_to: "{{ item }}"
+      delegate_facts: true
+      loop: "{{ ansible_play_hosts }}"
+
+    - name: Trust core's local root CA on the node
+      ansible.builtin.include_tasks: tasks/trust-core-ca.yml
+
+    # A disk that was ever used for Ceph (by this playbook on a prior partial
+    # attempt, or by anything else before this repo managed it) keeps its
+    # bluestore/LVM signature - ceph-volume then refuses to touch it
+    # ("has a filesystem") to avoid destroying someone else's data. Only wipe
+    # it here if we don't already have a completed OSD there ourselves.
+    - name: Prepare the Ceph OSD disks
+      when: "'osd' in ceph_roles"
+      block:
+        - name: Check whether each OSD disk already has our completion stamp
+          ansible.builtin.stat:
+            path: "/var/lib/ceph/osd/.{{ item.data }}.created"
+          loop: "{{ ceph_disks }}"
+          loop_control:
+            label: "{{ item.data }}"
+          register: compute_osd_stamps
+
+        - name: For disks without our stamp, check for a pre-existing signature
+          ansible.builtin.command: "blkid -o value -s TYPE /dev/disk/by-id/{{ item.item.data }}"
+          loop: "{{ compute_osd_stamps.results }}"
+          loop_control:
+            label: "{{ item.item.data }}"
+          when: not item.stat.exists
+          register: compute_osd_signatures
+          changed_when: false
+          failed_when: false
+
+        - name: Wipe disks that carry a signature we don't already own
+          # wipefs, not ceph-volume: this runs before lxc.incus.ceph installs
+          # the ceph-osd/ceph-volume packages, so ceph-volume isn't available
+          # yet. wipefs is enough to clear the "has a filesystem" refusal.
+          ansible.builtin.command: "wipefs --all /dev/disk/by-id/{{ item.item.item.data }}"
+          loop: "{{ compute_osd_signatures.results }}"
+          loop_control:
+            label: "{{ item.item.item.data }}"
+          when: item.rc is defined and item.rc == 0 and item.stdout | default('') | trim | length > 0
+          changed_when: true
+
+    # These specific nodes have /var/lib/ceph/mon and /var/lib/ceph/osd
+    # owned by root:root, pre-dating any Ceph package install by months (base
+    # OS image/prior manual test, not this automation). ceph-mon --mkfs
+    # refuses with "Permission denied" until they're owned by the ceph
+    # system user, and installing the ceph packages doesn't retroactively
+    # fix ownership on a directory it finds already there.
+    - name: Fix ownership of pre-existing /var/lib/ceph subdirectories
+      when: "'mon' in ceph_roles or 'osd' in ceph_roles"
+      block:
+        - name: Install ceph-base so the ceph system user exists
+          ansible.builtin.apt:
+            name: ceph-base
+            state: present
+
+        - name: Ensure /var/lib/ceph/mon and /var/lib/ceph/osd are owned by the ceph user
+          ansible.builtin.file:
+            path: "/var/lib/ceph/{{ item }}"
+            state: directory
+            owner: ceph
+            group: ceph
+            mode: "0755"
+          loop:
+            - mon
+            - osd
+
+    # lxc.incus.ceph generates its initial monmap itself (see the note below
+    # for why that one is broken: FQDN mon names instead of the short --id,
+    # no msgr2/v2 addressing). Pre-seed the shared cache file the role reads
+    # from (guarded by the same `creates:` it uses itself) with a correct
+    # monmap instead, so it never generates the broken one in the first
+    # place. This alone isn't enough (see the rescue: block below for why),
+    # but it does mean the mon starts from a correct state.
+    - name: Pre-seed a correct Ceph monmap before lxc.incus.ceph can generate a broken one
+      when: "'mon' in ceph_roles"
+      block:
+        - name: Ensure the shared cache directory exists (on the controller)
+          ansible.builtin.file:
+            path: "{{ config_root_dir }}/data/ceph"
+            state: directory
+            mode: "0700"
+          delegate_to: 127.0.0.1
+
+        - name: Check whether the monmap cache already exists (on the controller)
+          ansible.builtin.stat:
+            path: "{{ config_root_dir }}/data/ceph/cluster.{{ ceph_fsid }}.mon.map"
+          register: compute_monmap_cache
+          delegate_to: 127.0.0.1
+
+        # monmaptool has no reason to exist on the controller (and installing
+        # random Ceph packages on the operator's own machine isn't this
+        # playbook's place) - build it on the bootstrap node instead, exactly
+        # where lxc.incus.ceph's own (broken) generation would otherwise run,
+        # then fetch it into the same controller-side cache that role reads
+        # from.
+        - name: Install monmaptool on the bootstrap node so it can build the correct monmap
+          ansible.builtin.apt:
+            name: ceph-base
+            state: present
+          when: >-
+            not compute_monmap_cache.stat.exists and
+            compute_bootstrap_host == inventory_hostname
+
+        - name: Build the correct monmap on the bootstrap node
+          ansible.builtin.command: >-
+            monmaptool --create --fsid {{ ceph_fsid }} --set-min-mon-release=reef
+            {% for host in ansible_play_hosts | sort %}{%
+            if hostvars[host]['ceph_fsid'] | default('') == ceph_fsid
+            and 'mon' in hostvars[host]['ceph_roles'] | default([]) %}
+            --addv {{ host.split('.')[0] }}
+            '[v2:{{ hostvars[host]['ceph_ip_address'] }}:3300,v1:{{ hostvars[host]['ceph_ip_address'] }}:6789]'
+            {% endif %}{% endfor %}
+            /tmp/phorge-ceph-monmap.preseed
+          when: >-
+            not compute_monmap_cache.stat.exists and
+            compute_bootstrap_host == inventory_hostname
+          changed_when: true
+
+        - name: Fetch the correct monmap into the shared cache
+          ansible.builtin.fetch:
+            src: /tmp/phorge-ceph-monmap.preseed
+            dest: "{{ config_root_dir }}/data/ceph/cluster.{{ ceph_fsid }}.mon.map"
+            flat: true
+          when: >-
+            not compute_monmap_cache.stat.exists and
+            compute_bootstrap_host == inventory_hostname
+
+        - name: Remove the temporary monmap file from the bootstrap node
+          ansible.builtin.file:
+            path: /tmp/phorge-ceph-monmap.preseed
+            state: absent
+          when: >-
+            not compute_monmap_cache.stat.exists and
+            compute_bootstrap_host == inventory_hostname
+  tasks:
+    # roles: can't be wrapped in a block/rescue, and we need one here: even
+    # with a correct starting monmap (pre_tasks above), a mon that doesn't
+    # reach quorum within its ~2s probe timeout falls back to reseeding
+    # itself from ceph.conf's mon_initial_members - which lxc.incus.ceph
+    # still renders with the FQDN names (comp-opti-01.phorge), not the short
+    # --id (comp-opti-01) the daemon actually answers to. That reseed reintroduces
+    # the exact same "mostly ignoring mon.X, not part of monmap" rejection,
+    # so lxc.incus.ceph's own "Enable msgr2" handler hard-fails the play
+    # before this repo's own fix ever gets a chance to run. Catch that
+    # failure, fix it for real, then finish the rest of the deployment.
+    - name: Deploy Incus, Ceph and OVN
+      block:
+        - name: Run lxc.incus.system_settings
+          ansible.builtin.include_role:
+            name: lxc.incus.system_settings
+            public: true
+
+        - name: Run lxc.incus.ceph
+          ansible.builtin.include_role:
+            name: lxc.incus.ceph
+            public: true
+
+        - name: Run lxc.incus.ovn
+          ansible.builtin.include_role:
+            name: lxc.incus.ovn
+            public: true
+
+        - name: Run lxc.incus.incus
+          ansible.builtin.include_role:
+            name: lxc.incus.incus
+            public: true
+      rescue:
+        - name: Only handle the known lxc.incus.ceph mon quorum bug - re-raise anything else
+          ansible.builtin.assert:
+            that: "'mon' in ceph_roles"
+            fail_msg: >-
+              {{ ansible_failed_task.name }} failed and this isn't a mon node,
+              so this isn't the known quorum bug. Re-run with -vvv to see the
+              real error: {{ ansible_failed_result.msg | default('(see above)') }}
+
+        - name: Use the short hostname in mon_initial_members, matching the mon's own --id
+          ansible.builtin.lineinfile:
+            path: /etc/ceph/ceph.conf
+            regexp: '^mon_initial_members\s*='
+            line: >-
+              mon_initial_members = {% for host in ansible_play_hosts | sort %}{%
+              if hostvars[host]['ceph_fsid'] | default('') == ceph_fsid
+              and 'mon' in hostvars[host]['ceph_roles'] | default([]) %}{{
+              host.split('.')[0] }}{% if not loop.last %},{% endif %}{% endif %}{% endfor %}
+
+        - name: Check the mon's current quorum state
+          ansible.builtin.command: "ceph daemon mon.{{ inventory_hostname_short }} mon_status"
+          changed_when: false
+          failed_when: false
+          register: compute_ceph_mon_status
+
+        - name: Rebuild and inject a monmap with the short names, msgr2 addressing and min-mon-release
+          when: >-
+            compute_ceph_mon_status.rc != 0 or
+            (compute_ceph_mon_status.stdout | from_json).state not in ['leader', 'peon']
+          block:
+            - name: Stop the mon before correcting its monmap
+              ansible.builtin.systemd:
+                name: "ceph-mon@{{ inventory_hostname_short }}"
+                state: stopped
+
+            - name: Build the corrected monmap
+              ansible.builtin.command: >-
+                monmaptool --create --fsid {{ ceph_fsid }} --set-min-mon-release=reef --clobber
+                {% for host in ansible_play_hosts | sort %}{%
+                if hostvars[host]['ceph_fsid'] | default('') == ceph_fsid
+                and 'mon' in hostvars[host]['ceph_roles'] | default([]) %}
+                --addv {{ host.split('.')[0] }}
+                '[v2:{{ hostvars[host]['ceph_ip_address'] }}:3300,v1:{{ hostvars[host]['ceph_ip_address'] }}:6789]'
+                {% endif %}{% endfor %}
+                /tmp/phorge-ceph-monmap.fixed
+              changed_when: true
+
+            - name: Inject the corrected monmap
+              ansible.builtin.command: "ceph-mon -i {{ inventory_hostname_short }} --inject-monmap /tmp/phorge-ceph-monmap.fixed"
+              changed_when: true
+
+            - name: Remove the temporary monmap file
+              ansible.builtin.file:
+                path: /tmp/phorge-ceph-monmap.fixed
+                state: absent
+
+            - name: Start the mon again
+              ansible.builtin.systemd:
+                name: "ceph-mon@{{ inventory_hostname_short }}"
+                state: started
+
+        - name: Wait for the mon to reach quorum
+          ansible.builtin.command: "ceph daemon mon.{{ inventory_hostname_short }} mon_status"
+          register: compute_ceph_mon_status_wait
+          changed_when: false
+          until: >-
+            compute_ceph_mon_status_wait.rc == 0 and
+            (compute_ceph_mon_status_wait.stdout | from_json).state in ['leader', 'peon']
+          # The daemons keep electing in the background regardless of this
+          # loop - on this hardware, quorum has taken several minutes to
+          # settle even with a correct monmap. Generous on purpose: this only
+          # runs once, right after a fresh mon bootstrap.
+          retries: 60
+          delay: 10
+
+        # The mon is fixed and in quorum now - finish what the interrupted
+        # block above didn't get to. lxc.incus.ceph's own bootstrap tasks are
+        # idempotent (creates:-guarded) so this just picks up where it left
+        # off; ovn/incus never ran yet if ceph is what failed.
+        - name: Re-run lxc.incus.ceph now that the mon is in quorum
+          ansible.builtin.include_role:
+            name: lxc.incus.ceph
+            public: true
+
+        - name: Run lxc.incus.ovn
+          ansible.builtin.include_role:
+            name: lxc.incus.ovn
+            public: true
+
+        - name: Run lxc.incus.incus
+          ansible.builtin.include_role:
+            name: lxc.incus.incus
+            public: true
+
+  # Right after the roles, so a fresh cluster never sits in HEALTH_WARN with broken mgr modules. Every node restarts
+  # its mgr at the same time here, which is fine on a cluster that has just been created; configure-compute.yml does
+  # the same one node at a time for a running cluster.
+  post_tasks:
+    - name: Fix the Ceph mgr modules on Debian 13
+      ansible.builtin.include_tasks: tasks/ceph-mgr-bcrypt-shim.yml

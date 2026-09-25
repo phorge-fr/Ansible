@@ -28,7 +28,7 @@ docs/                     # manual procedures not yet automated
 | `control`, `core`, `svc` | k0s cluster nodes (managed by FrontPlane) | `setup-alloy.yml` only | `grafana.grafana.alloy` |
 | `storage` | `stor-rpi5-01` | `setup-storage.yml` | `rolehippie.mdadm`, `geerlingguy.nfs`, `docker`, `rustfs` |
 | `hpc` (`hpc-gpu`, `hpc-npu`) | `ai-z440-01`, `ai-rpi5-01` | `setup-hpc.yml` | `docker`, `rocm_drivers`, `nvidia_drivers`, `nvidia_container_toolkit` |
-| `compute` | `comp-opti-01` to `03` | none, see [docs/incus-installation.md](docs/incus-installation.md) | none |
+| `compute` | `comp-opti-01` to `03` | `setup-compute.yml` (bootstrap), `configure-compute.yml` (day-2 config), see [docs/incus-installation.md](docs/incus-installation.md) | `lxc.incus.system_settings`, `lxc.incus.ceph`, `lxc.incus.ovn`, `lxc.incus.incus` |
 | `all` | every host | `setup-alloy.yml` | `grafana.grafana.alloy` |
 | `all` | every host | `setup-hardening.yml` | `ssh_hardening` |
 | `all` | every host | `setup-firewall.yml` (one node at a time, `enforce` on `control`, `core`, `svc` and `storage`, `audit` elsewhere) | `firewall` |
@@ -36,6 +36,8 @@ docs/                     # manual procedures not yet automated
 `setup-alloy.yml` reads `alloy_config` from `group_vars`. Only `storage` and `compute` define it today, the other groups fall back to the role default (empty configuration).
 
 The `storage` configuration is [playbooks/files/alloy-storage.alloy](playbooks/files/alloy-storage.alloy): host and container metrics to Prometheus, container and journal logs to Loki, both on `core` over HTTPS with the core CA and basic auth. The credentials are vault values of the `storage` group vars, written to `/etc/alloy-secrets.env` (mode `0600`) and read by the service through the environment.
+
+`setup-compute.yml` deploys a 3-node Incus HA cluster (`configure-compute.yml` then applies every later config change: ACME, OIDC, Loki, OpenFGA authorization) (Ceph storage, OVN networking) via the vendored [`lxc.incus`](https://github.com/lxc/incus-deploy) collection - see [docs/incus-installation.md](docs/incus-installation.md) for the variable scheme, the prerequisites that still need real values, and `playbooks/teardown-compute.yml`, its destructive counterpart to return a node to a clean state (`-e teardown_confirm=true`).
 
 ## Roles
 

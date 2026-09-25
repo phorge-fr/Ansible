@@ -1,0 +1,16 @@
+---
+ceph_disks:
+  - data: nvme-eui.000000000000001000080d050015d982
+
+incus_ip_address: "{{ ansible_facts['enp0s31f6']['ipv4']['address'] }}"
+ceph_ip_address: "{{ ansible_facts['enp0s31f6']['ipv4']['address'] }}"
+ovn_ip_address: "{{ ansible_facts['enp0s31f6']['ipv4']['address'] }}"
+# incus_cluster_ip_address intentionally left unset: it defaults to
+# incus_ip_address, and both cluster and API traffic share comp-ew by design.
+
+incus_uplink_interface: enx00e04c4389a4  # comp-ns, the USB NIC - currently link-down/uncabled
+
+incus_init_node_config:
+  core.metrics_address: "{{ incus_ip_address }}:8444"
+  core.bgp_address: "{{ incus_ip_address }}"
+  core.bgp_routerid: "{{ incus_ip_address }}"

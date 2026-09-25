@@ -1,0 +1,79 @@
+---
+# Debian 13 ships Ceph 18.2.7 with Python 3.13 and a PyO3-based python3-bcrypt. ceph-mgr runs every module in its own
+# Python sub-interpreter, PyO3 refuses to be imported there ("PyO3 modules do not yet support subinterpreters"), and
+# mgr_util.py does `import bcrypt` at module level, which every mgr module imports through mgr_module. Result: ALL
+# mgr modules fail (MGR_MODULE_DEPENDENCY, permanent HEALTH_WARN), including the always-on ones (balancer,
+# pg_autoscaler, crash, devicehealth, rbd_support, ...) and prometheus, so no Ceph metrics at all.
+#
+# bcrypt is only used by mgr_util.password_hash(), i.e. the dashboard's user passwords, which this cluster doesn't
+# use, and it is the only PyO3 import that happens at import time (the OpenSSL ones are inside functions).
+#
+# Why /usr/share/ceph/mgr and not a PYTHONPATH drop-in (tried first, doesn't work): for each module the mgr builds
+# sys.path as mgr_module_path (/usr/share/ceph/mgr), then site-packages, then the interpreter's own path - which is
+# where PYTHONPATH ends up. Only the mgr directory comes before Debian's real bcrypt. The mgr only treats
+# DIRECTORIES holding a module.py as modules, so a plain bcrypt.py there is ignored by module discovery, and a
+# package upgrade leaves it alone (dpkg only manages the files it ships).
+- name: Check that ceph-mgr is installed on this node
+  ansible.builtin.stat:
+    path: /usr/share/ceph/mgr/mgr_util.py
+  register: compute_mgr_util
+
+- name: Install the bcrypt stand-in in the mgr module path
+  ansible.builtin.copy:
+    dest: /usr/share/ceph/mgr/bcrypt.py
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      """Stand-in for the PyO3 bcrypt package, which cannot be imported inside ceph-mgr sub-interpreters
+      (Debian 13 / Ceph 18.2.7). Managed by Ansible (playbooks/tasks/ceph-mgr-bcrypt-shim.yml).
+      ceph's mgr_util only uses bcrypt in password_hash(), for the dashboard's user passwords."""
+
+
+      def _unavailable(*args, **kwargs):
+          raise NotImplementedError("bcrypt is not available inside ceph-mgr sub-interpreters")
+
+
+      gensalt = hashpw = checkpw = _unavailable
+  when: compute_mgr_util.stat.exists
+  register: compute_mgr_bcrypt_shim
+
+# An earlier attempt put a shim in /usr/local/lib and set PYTHONPATH through a systemd drop-in on comp-opti-03. It
+# has no effect (see above), so remove it wherever it exists. Can be deleted from this file once it has run.
+- name: Remove the earlier PYTHONPATH-based attempt
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/ceph-mgr@.service.d/10-bcrypt-shim.conf
+    - /etc/systemd/system/ceph-mgr@.service.d
+    - /usr/local/lib/ceph-mgr-shims
+  register: compute_mgr_old_attempt
+
+- name: Reload systemd after removing the drop-in
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: compute_mgr_old_attempt.changed  # noqa: no-handler
+
+# The modules are imported when the mgr starts, so it has to restart to pick the stand-in up. Run this play one node
+# at a time (serial: 1) so that another mgr is always there to take over.
+- name: Restart the local mgr so it imports its modules again  # noqa: no-handler
+  ansible.builtin.systemd:
+    name: "ceph-mgr@{{ inventory_hostname_short }}"
+    state: restarted
+  when: >-
+    compute_mgr_util.stat.exists and
+    (compute_mgr_bcrypt_shim.changed or compute_mgr_old_attempt.changed)
+
+- name: Wait for a mgr to be available again  # noqa: no-handler
+  ansible.builtin.command: ceph mgr stat --format json
+  register: compute_mgr_stat
+  until: >-
+    compute_mgr_stat.rc == 0 and
+    (compute_mgr_stat.stdout | from_json).available | default(false)
+  retries: 12
+  delay: 5
+  changed_when: false
+  when: >-
+    compute_mgr_util.stat.exists and
+    (compute_mgr_bcrypt_shim.changed or compute_mgr_old_attempt.changed)

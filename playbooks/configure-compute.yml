@@ -109,6 +109,38 @@
       when: (item.stdout | default('') | trim) != (item.item.value | string | trim)
       changed_when: true
 
+    # ---- Networks --------------------------------------------------------
+    # Same one-shot problem as the server config: incus_init.network is only created at bootstrap. The keys of a
+    # network are compared with the live ones and the differing ones are set in ONE `incus network set`, on purpose:
+    # the UPLINK's ipv4.gateway and ipv4.ovn.ranges must change together (each one is validated against the other),
+    # and the OVN networks on it re-attach and re-allocate their router address once, not once per key.
+    # local_config (per-member, e.g. the parent interface) is not touched. Only the keys declared in group_vars are
+    # compared, so keys Incus fills in itself (volatile.*, generated addresses) never show up as a difference.
+    - name: Read the current config of each network declared in incus_init  # noqa: run-once[task]
+      ansible.builtin.command: "incus query /1.0/networks/{{ item.key }}"
+      loop: "{{ incus_init.network | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      register: compute_incus_networks_current
+      changed_when: false
+      failed_when: false
+      run_once: true
+
+    - name: Apply the network config keys that differ  # noqa: run-once[task]
+      ansible.builtin.command: "incus network set {{ item.item.key }} {{ compute_network_pairs | default('', true) }}"
+      vars:
+        compute_network_current: "{{ (item.stdout | from_json).config if item.rc == 0 else {} }}"
+        compute_network_pairs: >-
+          {% for k, v in item.item.value.config.items() if compute_network_current.get(k, '') != (v | string) %}{{ k }}="{{ v }}" {% endfor %}
+      loop: "{{ compute_incus_networks_current.results }}"
+      loop_control:
+        label: "{{ item.item.key }}"
+      # An empty rendering comes back as None, and `None | trim` is the string "None" (length 4): the default() is what
+      # keeps a network with nothing to change from being "applied" with no key at all.
+      when: item.rc == 0 and (compute_network_pairs | default('', true) | trim | length > 0)
+      changed_when: true
+      run_once: true
+
     # ---- OpenFGA authorization -------------------------------------------
     # Store: created here (not in setup-compute.yml) because it has to exist
     # before the three authorization.openfga.* keys can be set, and those

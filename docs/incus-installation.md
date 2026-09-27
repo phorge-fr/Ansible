@@ -36,17 +36,65 @@ Two NICs per node, a decision already made for this cluster:
   addresses `10.10.0.1-3`): Incus's API (`core.https_address`) and cluster
   traffic (`cluster.https_address`), Ceph's public network, and OVN's own
   DB/tunnel traffic. All east-west, node-to-node traffic.
-- A USB NIC (comp-ns, VLAN 80, `10.10.1.0/24`, no host addresses assigned on
+- A USB NIC (comp-ns, VLAN 80, `10.11.0.0/24`, no host addresses assigned on
   the router) whose interface name differs per host
   (`enx00e04c4389a4`/`enx00e04c3f8b2a`/`enx00e04c3f8b4f` - see each host's
   `host_vars`): the `parent` of Incus's physical `UPLINK` network, i.e. the
   external/instance-facing north-south uplink.
 
-**This second NIC is currently link-down/uncabled on all three nodes.**
-Defining the `UPLINK` network in Incus succeeds either way, but it won't pass
-any traffic until it is physically cabled to the VLAN-80 switch port - check
-with `ip -br link show enx...` before expecting instances to reach the outside
-world through it.
+**This second NIC is cabled and carries live traffic** (VM to VM across nodes and
+VM to Internet work, through the OVN routers' external addresses on the
+`UPLINK`). Checked 2026-09-27: `comp-opti-01` and `-02` are up, `comp-opti-03`
+was `NO-CARRIER` - check with `ip -br link show enx...`. A node whose uplink has no
+link cannot carry the north-south traffic of the OVN routers scheduled on it.
+
+## Address plan, forwards and load balancers
+
+| Range | Where | Use |
+|---|---|---|
+| `10.10.0.0/24` | comp-ew (VLAN 70), router `10.10.0.254` | East-west: cluster, API, Ceph, OVN, BGP sessions |
+| `10.11.0.0/24` | comp-ns (VLAN 80), router `10.11.0.254` | North-south: `UPLINK` `ipv4.ovn.ranges` `10.11.0.10-250`, one address per OVN network for its virtual router's external port |
+| `10.12.0.0/24` | routed, not a VLAN | Network forwards and load balancers: `UPLINK` `ipv4.routes` |
+
+`10.12.0.0/24` has no gateway and no interface on the router on purpose. OVN only accepts a forward or load balancer
+listen address inside the uplink's `ipv4.routes`; Incus announces each one over BGP as a `/32` with the OVN router's
+comp-ns address as next hop, and the MikroTik learns it from `bgp_connections` (Network repo). An address that is not
+announced is not answered by anything. The session is the one between the nodes' `core.bgp_address` (comp-ew) and the
+router's comp-ew address (`bgp.peers.router` on the `UPLINK`, iBGP, AS `65535`, matching `core.bgp_asn`).
+
+```bash
+incus network forward create default 10.12.0.10 target_address=10.99.0.5
+incus network forward port add default 10.12.0.10 tcp 443 10.99.0.5 443
+```
+
+Exposing one to the Internet is a dst-NAT on the router (or an HAProxy backend) towards that listen address, plus the
+forward rule that allows it in the Network repo.
+
+`configure-compute.yml` applies `incus_init.network.*.config` on a running cluster (compared key by key with the live
+config, the differing keys set in one command). Changing the `UPLINK`'s gateway and ranges on a live cluster is safe:
+each OVN network on it drops its now-invalid router address, detaches and gets a new one. Order when the plan changes:
+Network first (`tofu apply`, which needs `prevent_destroy` lifted for the comp-ns address), then `configure-compute.yml`.
+comp-ns carries live traffic, so this is not a maintenance-free change: the routers of the OVN networks on the `UPLINK`
+(and so the egress of the running instances) are interrupted while they re-attach with their new address, and again if
+the MikroTik's comp-ns address changes at another moment. See "Changing the north-south range on a live cluster".
+
+### Changing the north-south range on a live cluster
+
+Two things have to change, the MikroTik's address on VLAN 80 (Network repo) and the `UPLINK`'s gateway and ranges
+(Incus), and instances are using the uplink. Do it make-before-break so the router never sits on the wrong side:
+
+1. **Network, additive**: give the router its new address next to the old one, by adding
+   `{ interface = "comp-ns", address = "<new>.254/24" }` to `ip_addresses` in `terraform.tfvars` while
+   `networks.comp-ns.cidr` still has the old range. Nothing is destroyed, so `prevent_destroy` is not in the way.
+2. **Incus**: change `incus_init.network.UPLINK.config` in `group_vars/compute.yml` and run `configure-compute.yml`.
+   The OVN networks on the uplink re-attach with an address of the new range; the egress of their instances is
+   interrupted for that moment only, the router already answers on both ranges.
+3. **Network, cleanup**: switch `networks.comp-ns.cidr` to the new range and remove the extra `ip_addresses` entry (same
+   resource key, so it is kept) - the old address is the only thing destroyed, with `prevent_destroy` lifted for that one
+   apply, and nothing uses it any more.
+
+Check afterwards: `incus network get <network> volatile.network.ipv4.address` is in the new range for every OVN network
+(`default`, `demo`), and an instance still reaches the Internet.
 
 ## Storage
 
@@ -80,8 +128,8 @@ renaming a host or adding a fourth one.
 
 ## Prerequisites checklist (things outside this repo's reach)
 
-1. **Cable the north-south NIC** on all three nodes and confirm link-up - see
-   above.
+1. **North-south NIC**: cabled on `comp-opti-01` and `-02`; `comp-opti-03` had no
+   carrier on 2026-09-27 - see above.
 2. **Cloudflare API token** - done. Scoped token (Zone.DNS Edit on
    `phorge.fr` only, not the Global API Key), vaulted as
    `incus_cloudflare_api_token`, fed to lego as
@@ -120,7 +168,7 @@ renaming a host or adding a fourth one.
    `core.bgp_asn`); the per-node `core.bgp_address`/`core.bgp_routerid` come
    from `incus_init_node_config`.
 
-Only the north-south cabling (1) is still open. Everything else in
+Only the north-south NIC of `comp-opti-03` (no carrier when last checked) is still open. Everything else in
 `incus_init_shared_config` is applied and can be changed at any time with
 `configure-compute.yml`.
 

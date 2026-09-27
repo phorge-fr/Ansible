@@ -8,7 +8,7 @@ ovn_ip_address: "{{ ansible_facts['enp0s31f6']['ipv4']['address'] }}"
 # incus_cluster_ip_address intentionally left unset: it defaults to
 # incus_ip_address, and both cluster and API traffic share comp-ew by design.
 
-incus_uplink_interface: enx00e04c3f8b2a  # comp-ns, the USB NIC - currently link-down/uncabled
+incus_uplink_interface: enx00e04c3f8b2a  # comp-ns, the USB NIC - cabled, link up
 
 incus_init_node_config:
   core.metrics_address: "{{ incus_ip_address }}:8444"

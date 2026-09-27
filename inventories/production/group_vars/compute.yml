@@ -191,11 +191,26 @@ incus_init:
     UPLINK:
       type: physical
       local_config:
-        parent: "{{ incus_uplink_interface }}"  # per-host, see host_vars - comp-ns, currently uncabled
+        parent: "{{ incus_uplink_interface }}"  # per-host, see host_vars - comp-ns
+      # Address plan (Network repo, docs/architecture.md):
+      # - 10.10.0.0/24 comp-ew: east-west (cluster, API, Ceph, OVN, BGP sessions), router 10.10.0.254
+      # - 10.11.0.0/24 comp-ns (VLAN 80): north-south, router 10.11.0.254. Each OVN network takes ONE address of
+      #   ipv4.ovn.ranges for its virtual router's external port. Gateway and ranges must be changed in ONE
+      #   `incus network set` (each is validated against the other): the OVN networks on the uplink then drop their
+      #   now-invalid router address, detach and get a new one (configure-compute.yml does it that way).
+      # - 10.12.0.0/24 network forwards and load balancers. NOT a VLAN, no gateway and no address on the router:
+      #   OVN only accepts a forward or load balancer listen address inside the uplink's ipv4.routes, Incus announces
+      #   each one over BGP as a /32 with the OVN router's comp-ns address as next hop, and the MikroTik learns it
+      #   from bgp_connections.
       config:
-        ipv4.gateway: "10.10.1.254/24"  # the real MikroTik gateway on VLAN 80
-        ipv4.ovn.ranges: "10.10.1.10-10.10.1.250"
-        dns.nameservers: "10.10.1.254"
+        ipv4.gateway: "10.11.0.254/24"
+        ipv4.ovn.ranges: "10.11.0.10-10.11.0.250"
+        dns.nameservers: "10.11.0.254"
+        ipv4.routes: "10.12.0.0/24"
+        # The session runs between the nodes' core.bgp_address (comp-ew) and the router's comp-ew address, whatever
+        # the uplink's own subnet is. iBGP: same ASN as core.bgp_asn and as the Network repo's bgp_connections.
+        bgp.peers.router.address: "10.10.0.254"
+        bgp.peers.router.asn: "65535"
       description: "Physical uplink to the north-south VLAN (comp-ns), for OVN routers"
     default:
       type: ovn

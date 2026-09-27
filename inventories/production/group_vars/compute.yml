@@ -81,9 +81,10 @@ config_root_dir: "{{ playbook_dir }}/../.generated"
 # OpenFGA (authorization.openfga.*) is deliberately NOT in here: its three
 # keys must be set together in ONE `incus config set`, and the store id only
 # exists once the store has been created - both are handled by
-# configure-compute.yml (see incus_openfga_* below), not by this dict. Until
-# that has run, Incus has no authorizer and any authenticated user (OIDC
-# included) has full rights.
+# configure-compute.yml (see incus_openfga_* below), not by this dict. Loading
+# OpenFGA is not enough on Incus 7.4 though: each client class is routed to a
+# driver by authorization.client.* (below), and the built-in route for OIDC is
+# "allow" - without it every Authentik user is a full admin, OpenFGA or not.
 incus_init_shared_config:
   cluster.healing_threshold: "4"
   cluster.offline_threshold: "11"
@@ -116,6 +117,10 @@ incus_init_shared_config:
   # "incus" - keep them in sync when that blueprint is created.
   oidc.issuer: "https://auth.phorge.fr/application/o/incus/"
   oidc.scopes: "openid, offline_access, email"
+  # Send OIDC users through OpenFGA (internal/server/auth/router.go, defaultRoutes(): unset means "allow"). Until the
+  # OpenFGA driver is loaded, a route to it resolves to "deny", so a fresh bootstrap fails closed. Unrestricted TLS
+  # certificates and the unix socket keep their "allow" default (Ansible, admin scripts).
+  authorization.client.oidc: openfga
   logging.loki-frontplane.target.type: loki
   logging.loki-frontplane.target.address: "https://loki.core.phorge"  # confirmed real (FrontPlane's loki Ingress host)
   logging.loki-frontplane.target.username: iaas

@@ -32,10 +32,13 @@ docs/                     # manual procedures not yet automated
 | `all` | every host | `setup-alloy.yml` | `grafana.grafana.alloy` |
 | `all` | every host | `setup-hardening.yml` | `ssh_hardening` |
 | `all` | every host | `setup-firewall.yml` (one node at a time, `enforce` on `control`, `core`, `svc` and `storage`, `audit` elsewhere) | `firewall` |
+| `svc` | `svc-rock64-01` to `03` (Armbian) | `setup-ramlog.yml` | - |
 
 `setup-alloy.yml` reads `alloy_config` from `group_vars`. Only `storage` and `compute` define it today, the other groups fall back to the role default (empty configuration).
 
 The `storage` configuration is [playbooks/files/alloy-storage.alloy](playbooks/files/alloy-storage.alloy): host and container metrics to Prometheus, container and journal logs to Loki, both on `core` over HTTPS with the core CA and basic auth. The credentials are vault values of the `storage` group vars, written to `/etc/alloy-secrets.env` (mode `0600`) and read by the service through the environment.
+
+`setup-ramlog.yml` keeps the Armbian ramlog of the `svc` nodes working next to k3s: the kubelet container logs (`/var/log/pods`) are moved to persistent storage via a symlink so they no longer fill the 50 MB zram nor break the logrotate postrotate hook with stale synced files (hosts without the Armbian ramlog script are skipped, so the playbook can run on any group).
 
 `setup-compute.yml` deploys a 3-node Incus HA cluster (`configure-compute.yml` then applies every later config change: ACME, OIDC, Loki, OpenFGA authorization) (Ceph storage, OVN networking) via the vendored [`lxc.incus`](https://github.com/lxc/incus-deploy) collection - see [docs/incus-installation.md](docs/incus-installation.md) for the variable scheme, the prerequisites that still need real values, and `playbooks/teardown-compute.yml`, its destructive counterpart to return a node to a clean state (`-e teardown_confirm=true`).
 

@@ -66,6 +66,25 @@
         - 127.0.0.1
         - localhost
 
+    # All three nodes use the same Realtek RTL8153 USB dongle as the
+    # north-south NIC. The r8152 driver wants its PHY patch firmware from the
+    # firmware-realtek package - without it every boot logs "unable to load
+    # firmware patch rtl_nic/rtl8153a-4.fw". ethtool goes with it: it is what
+    # lets us inspect (and if ever needed, correct) the link's advertised
+    # modes. The driver only applies the firmware when it binds to the device,
+    # so the reload play at the bottom of this file runs when this changes.
+    - name: Install the RTL8153 firmware and ethtool
+      ansible.builtin.apt:
+        name:
+          - firmware-realtek
+          - ethtool
+        state: present
+      register: compute_nic_firmware
+
+    - name: Remember whether the NIC firmware was just installed (drives the driver reload play)
+      ansible.builtin.set_fact:
+        compute_rtl8153_fw_new: "{{ compute_nic_firmware is changed }}"
+
     # ansible_play_hosts shrinks as hosts fail during the play - re-evaluating
     # `ansible_play_hosts | sort | first` after the original bootstrap host
     # fails a task later on would silently re-elect a different host and have
@@ -346,3 +365,32 @@
   post_tasks:
     - name: Fix the Ceph mgr modules on Debian 13
       ansible.builtin.include_tasks: tasks/ceph-mgr-bcrypt-shim.yml
+
+# r8152 applies its firmware patch only when it binds to the device, so a
+# freshly installed firmware-realtek needs the module reloaded (the daemon
+# keeps running whatever it loaded at boot - which was nothing). Separate play
+# so it can run one node at a time: the reload briefly takes the node's
+# north-south uplink down (the OVN parent), and the cluster should never have
+# two members without a working uplink at once. On subsequent runs the apt
+# task in the play above reports no change and this whole play is skipped.
+- name: Compute - Reload the USB NIC driver to apply its firmware
+  hosts: compute
+  become: true
+  serial: 1
+  tasks:
+    - name: Reload r8152 with the firmware file present
+      when: compute_rtl8153_fw_new | default(false)
+      block:
+        - name: Bring the north-south NIC down so the module can be unloaded
+          ansible.builtin.command: "ip link set {{ incus_uplink_interface }} down"
+          changed_when: true
+
+        - name: Unload the r8152 module
+          ansible.builtin.command: "modprobe -r r8152"
+
+        - name: Load the r8152 module again, now with the firmware available
+          ansible.builtin.command: "modprobe r8152"
+
+        - name: Bring the north-south NIC back up
+          ansible.builtin.command: "ip link set {{ incus_uplink_interface }} up"
+          changed_when: true

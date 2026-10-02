@@ -398,6 +398,19 @@
           ansible.builtin.command: "ip link set {{ incus_uplink_interface }} down"
           changed_when: true
 
+        - name: Unload the generic CDC-ECM drivers that reference r8152
+          # r8153_ecm (and through it cdc_ether) references symbols from
+          # r8152, so r8152 cannot be unloaded while they are loaded -
+          # observed on comp-opti-01 ("Module r8152 is in use") while the
+          # identical reload worked on the other two nodes. Neither driver is
+          # ever bound to the device (r8152 wins the binding), so removing
+          # them is harmless: udev reloads them on the next uevent if their
+          # modalias is matched again.
+          ansible.builtin.command: "modprobe -r {{ item }}"
+          loop: [r8153_ecm, cdc_ether]
+          failed_when: false
+          changed_when: true
+
         - name: Unload the r8152 module
           ansible.builtin.command: "modprobe -r r8152"
 

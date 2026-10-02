@@ -135,7 +135,9 @@ incus_init_shared_config:
   # them a second time from Incus itself would duplicate them. Each member sends only
   # its own events (verified in Loki: instance == location on every stream).
   logging.loki-frontplane.types: "lifecycle,network-acl"
-  user.grafana_base_url: "https://monitoring.phorge.fr"
+  # The key the Incus UI actually prefers (checked first in the UI's own JS,
+  # see #16); user.grafana_base_url remains supported as a fallback.
+  user.ui.grafana.base_url: "https://monitoring.phorge.fr/d/incus/incus"
   user.ui.title: "Phorge Cloud IaaS"
 
 # Real Cloudflare API token, scoped (Zone.DNS Edit, phorge.fr only).

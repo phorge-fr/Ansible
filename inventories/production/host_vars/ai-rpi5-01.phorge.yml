@@ -1,0 +1,9 @@
+---
+# Kernel command line (playbooks/setup-kernel-cmdline.yml): the Pi kernel
+# ships cgroup_disable=memory, which strips the memory controller from cgroup
+# v2 - Docker memory limits are silently ignored and container_memory_*
+# metrics stay at zero. The ctrl-rpi4-* nodes already carry the same two
+# parameters in their own cmdline.txt.
+kernel_cmdline_params:
+  - cgroup_enable=memory
+  - cgroup_memory=1

@@ -1,0 +1,6 @@
+---
+- name: Apply the kernel command line parameters on the hosts that define them
+  hosts: all
+  become: true
+  roles:
+    - kernel_cmdline

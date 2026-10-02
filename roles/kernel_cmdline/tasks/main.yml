@@ -1,0 +1,115 @@
+---
+# Appends parameters to the single-line kernel command line of the hosts that
+# define them: the file the Pi firmware really boots from is
+# /boot/firmware/cmdline.txt (/boot/cmdline.txt is not used), and hosts without
+# parameters or without that file are left untouched, so the role can run on
+# the whole inventory. A broken command line means a node that cannot be fixed
+# remotely, so the current file is validated first, the computed line is
+# validated before it is written, the previous state is backed up and the
+# written file is read back. The role never reboots: hosts whose running
+# kernel command line does not yet contain the parameters are reported at the
+# end of the run instead.
+
+- name: Look for the boot command line file
+  ansible.builtin.stat:
+    path: "{{ kernel_cmdline_file }}"
+  register: kernel_cmdline_stat
+  when: kernel_cmdline_params | length > 0
+
+- name: Read the current command line
+  ansible.builtin.slurp:
+    src: "{{ kernel_cmdline_file }}"
+  register: kernel_cmdline_raw
+  when: kernel_cmdline_stat is not skipped and kernel_cmdline_stat.stat.exists
+
+- name: Flag the hosts whose boot file will be managed
+  ansible.builtin.set_fact:
+    kernel_cmdline_manage: "{{ kernel_cmdline_raw is not skipped }}"
+
+- name: Decode the current command line
+  ansible.builtin.set_fact:
+    kernel_cmdline_current: "{{ kernel_cmdline_raw.content | b64decode | trim }}"
+  when: kernel_cmdline_manage
+
+# Guard rail: a multi-line file, or one without root=, boots differently than
+# expected - refuse to edit it blindly rather than guess what to append to.
+- name: The boot file must be a single line keeping its root= entry
+  ansible.builtin.assert:
+    that:
+      - "'\n' not in kernel_cmdline_current"
+      - "'root=' in kernel_cmdline_current"
+    fail_msg: >-
+      {{ kernel_cmdline_file }} on {{ inventory_hostname }} is not a single
+      command line with a root= entry - refusing to edit it blindly
+  when: kernel_cmdline_manage
+
+- name: Compute the parameters missing from the command line
+  ansible.builtin.set_fact:
+    kernel_cmdline_missing: "{{ kernel_cmdline_params | difference(kernel_cmdline_current.split()) }}"
+  when: kernel_cmdline_manage
+
+- name: Validate, back up and write the new command line
+  when: kernel_cmdline_manage and kernel_cmdline_missing | length > 0 and not ansible_check_mode
+  block:
+    - name: Compute the new command line
+      ansible.builtin.set_fact:
+        kernel_cmdline_new: "{{ kernel_cmdline_current }} {{ kernel_cmdline_missing | join(' ') }}"
+
+    - name: The computed line must extend the current one and keep root=
+      ansible.builtin.assert:
+        that:
+          - kernel_cmdline_new.startswith(kernel_cmdline_current)
+          - "'\n' not in kernel_cmdline_new"
+          - "'root=' in kernel_cmdline_new"
+        fail_msg: >-
+          The computed command line does not preserve the current one -
+          refusing to write it to {{ kernel_cmdline_file }}
+
+    # The boot partition is FAT, which forbids colons in file names, so copy's
+    # own timestamped backup cannot be used - a fixed-name .bak is written
+    # instead, always right before the change, so it holds the state this run
+    # is about to replace.
+    - name: Back up the current file before changing it
+      ansible.builtin.copy:
+        src: "{{ kernel_cmdline_file }}"
+        dest: "{{ kernel_cmdline_file }}.bak"
+        remote_src: true
+
+    - name: Write the new command line
+      ansible.builtin.copy:
+        dest: "{{ kernel_cmdline_file }}"
+        content: "{{ kernel_cmdline_new }}\n"
+      register: kernel_cmdline_written
+
+    - name: Read back the written file
+      ansible.builtin.slurp:
+        src: "{{ kernel_cmdline_file }}"
+      register: kernel_cmdline_after_write
+
+    - name: The written file must hold exactly the computed command line
+      ansible.builtin.assert:
+        that:
+          - kernel_cmdline_after_write.content | b64decode | trim == kernel_cmdline_new
+        fail_msg: >-
+          {{ kernel_cmdline_file }} does not match the computed command line -
+          restore the backup and check what happened
+
+- name: Read the running kernel command line
+  ansible.builtin.slurp:
+    src: /proc/cmdline
+  register: kernel_cmdline_running
+  when: kernel_cmdline_manage
+
+- name: Flag the hosts that need a reboot to apply the parameters
+  ansible.builtin.set_fact:
+    kernel_cmdline_reboot_needed: >-
+      {{ kernel_cmdline_params | difference((kernel_cmdline_running.content | b64decode).split()) | length > 0 }}
+  when: kernel_cmdline_manage
+
+- name: Report the hosts that need a reboot
+  ansible.builtin.debug:
+    msg: >-
+      The parameters {{ kernel_cmdline_params | join(' ') }} are set in
+      {{ kernel_cmdline_file }} but not yet active on {{ inventory_hostname }} -
+      reboot the host to apply them.
+  when: kernel_cmdline_manage and kernel_cmdline_reboot_needed

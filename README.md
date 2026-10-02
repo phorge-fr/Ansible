@@ -32,6 +32,7 @@ docs/                     # manual procedures not yet automated
 | `all` | every host | `setup-alloy.yml` | `grafana.grafana.alloy` |
 | `all` | every host | `setup-hardening.yml` | `ssh_hardening` |
 | `all` | every host | `setup-firewall.yml` (one node at a time, `enforce` on `control`, `core`, `svc` and `storage`, `audit` elsewhere) | `firewall` |
+| `all` | every host | `setup-timesync.yml` (checks clock drift and fixes it in the same run) | - |
 | `svc` | `svc-rock64-01` to `03` (Armbian) | `setup-ramlog.yml` | - |
 
 `setup-alloy.yml` reads `alloy_config` from `group_vars`. Only `storage` and `compute` define it today, the other groups fall back to the role default (empty configuration).

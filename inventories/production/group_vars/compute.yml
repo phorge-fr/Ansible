@@ -123,8 +123,13 @@ incus_init_shared_config:
   authorization.client.oidc: openfga
   logging.loki-frontplane.target.type: loki
   logging.loki-frontplane.target.address: "https://loki.core.phorge"  # confirmed real (FrontPlane's loki Ingress host)
-  logging.loki-frontplane.target.username: iaas
-  logging.loki-frontplane.target.password: "{{ incus_loki_password }}"  # TODO: see prerequisites checklist
+  # Same identity as Alloy's own push (alloy_basic_auth_username/alloy_loki_basic_auth_password below): "iaas" used
+  # to be a separate user for this logger alone, but Hangar#81 removed it as a believed-redundant duplicate of
+  # "compute" on 2026-09-26, which silently broke this push (401, never logged - see Hangar#115). They were never
+  # actually the same thing; reusing "compute" here instead of restoring "iaas" keeps that fix's single-identity
+  # intent while no longer pointing at a deleted user.
+  logging.loki-frontplane.target.username: "{{ alloy_basic_auth_username }}"
+  logging.loki-frontplane.target.password: "{{ alloy_loki_basic_auth_password }}"
   logging.loki-frontplane.target.ca_cert: "{{ lookup('ansible.builtin.file', 'alloy-ca.crt') }}"
   # Not "logging": the daemon logs already reach Loki from the journal (Alloy), sending
   # them a second time from Incus itself would duplicate them. Each member sends only
@@ -175,19 +180,6 @@ incus_openfga_api_token: !vault |
           6461643731643663620a353563363831353133343933326631373238333431306263393639613235
           33386535326664326238633738336634333363313037313933643735326637636232366532346430
           6464346631623864396562316432353664613331313863363937
-#
-# incus_loki_password: the "iaas" user's password in FrontPlane's
-# loki-basic-auth-secret (overlays/core/apps/loki/secrets.yml) - regenerated
-# there on 2026-09-23 (the previous hash matched no known plaintext).
-incus_loki_password: !vault |
-          $ANSIBLE_VAULT;1.1;AES256
-          36313537643061663966643132353137303238303035643863373431366431313062643966353863
-          3339373731323334386666636362626462386234323165630a663562366639383861376164353032
-          39303435373262663236316365316132366432633066326638303165376338373364396262326131
-          3332376337613264630a386165316162636463396638376466653632313532323435663161626332
-          35333363363230373933653462316135313533326637646361626136656161363834643635383866
-          3339373538366330363430356531343135383336653166663038
-
 incus_init_node_config: {}  # default; each host_vars overrides with its own bgp/metrics address keys
 
 incus_init:

@@ -1,0 +1,9 @@
+---
+# The file the Pi firmware actually boots from (/boot/cmdline.txt is not
+# used); hosts without this file are left untouched.
+kernel_cmdline_file: /boot/firmware/cmdline.txt
+
+# Parameters appended to the single command line. Set per host in host_vars,
+# empty everywhere else - see host_vars/stor-rpi5-01.phorge.yml and
+# host_vars/ai-rpi5-01.phorge.yml.
+kernel_cmdline_params: []

@@ -1,0 +1,98 @@
+---
+- name: Keep the Armbian ramlog working alongside the container logs
+  hosts: svc
+  serial: 1
+  become: true
+  tasks:
+    - name: Detect the Armbian ramlog script
+      ansible.builtin.stat:
+        path: /usr/lib/armbian/armbian-ramlog
+      register: svc_ramlog_script
+
+    # Armbian mounts a 50 MB zram-backed ext4 filesystem on /var/log and rsyncs it
+    # to /var/log.hdd on the SD card (see /usr/lib/armbian/armbian-ramlog). k3s
+    # writes every container log under /var/log/pods, which on these nodes filled
+    # half of the 50 MB ramlog on its own (31 MB for a single csi-nfs-controller
+    # pod on svc-rock64-02) while the daily sync kept piling stale pod directories
+    # into /var/log.hdd (244 MB there) - and the logrotate.service postrotate
+    # hook then failed touching those dangling files, leaving logrotate.service
+    # failed after every daily run.
+    #
+    # The fix moves the kubelet pod logs onto the SD card (/var/lib/kubelet-logs)
+    # and makes /var/log/pods a symlink: kubelet follows it, the 50 MB ramlog
+    # keeps its size, and the ramlog rsync then copies the dangling symlink
+    # instead of any pod content, so the postrotate find (-type f, symlinks are
+    # never traversed) sees no pod file again while the next boot still restores
+    # the symlink from /var/log.hdd. The target MUST live outside /var/log.hdd:
+    # the postrotate copies every regular file found there back onto the ramlog,
+    # which would truncate any pod log reachable from both sides at once.
+    - name: Keep the kubelet container logs out of the ramlog
+      when: svc_ramlog_script.stat.exists
+      block:
+        - name: Check whether /var/log/pods is still a plain directory
+          ansible.builtin.stat:
+            path: /var/log/pods
+            follow: false
+          register: svc_ramlog_pods
+
+        - name: Create the persistent home of the pod logs
+          ansible.builtin.file:
+            path: /var/lib/kubelet-logs/pods
+            state: directory
+            owner: root
+            group: root
+            mode: "0750"
+
+        - name: Copy the existing pod logs to persistent storage
+          ansible.builtin.command:
+            cmd: cp -a /var/log/pods/. /var/lib/kubelet-logs/pods/
+          when: svc_ramlog_pods.stat.isdir | default(false)
+          changed_when: true
+
+        - name: Drop the plain /var/log/pods directory
+          ansible.builtin.file:
+            path: /var/log/pods
+            state: absent
+          when: svc_ramlog_pods.stat.isdir | default(false)
+
+        - name: Point /var/log/pods at the persistent storage
+          ansible.builtin.file:
+            src: /var/lib/kubelet-logs/pods
+            dest: /var/log/pods
+            state: link
+
+        # The daily sync (rsync -v) and every postrotate failure are appended to
+        # the script's own log, which nothing rotates - it had grown to 26 MB on
+        # svc-rock64-02. Give it a real logrotate config (copytruncate: the file
+        # is written by the very service that runs logrotate) so it stays small.
+        - name: Rotate the ramlog's own log
+          ansible.builtin.copy:
+            dest: /etc/logrotate.d/armbian-ramlog
+            content: |
+              /var/log.hdd/armbian-ramlog.log {
+                  monthly
+                  rotate 2
+                  compress
+                  missingok
+                  notifempty
+                  copytruncate
+              }
+            owner: root
+            group: root
+            mode: "0644"
+
+        - name: Drop the pod logs synced to persistent storage so far
+          ansible.builtin.file:
+            path: /var/log.hdd/pods
+            state: absent
+
+        - name: Run logrotate once to apply and validate the fix
+          ansible.builtin.systemd:
+            name: logrotate.service
+            state: restarted
+          register: svc_ramlog_logrotate_run
+
+        - name: logrotate.service must come back healthy
+          ansible.builtin.assert:
+            that: not svc_ramlog_logrotate_run.failed
+            fail_msg: logrotate.service still fails, check journalctl -u logrotate.service

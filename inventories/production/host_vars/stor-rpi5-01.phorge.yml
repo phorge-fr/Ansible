@@ -39,6 +39,20 @@ firewall_published_ports:
       - "{{ management_network }}"
     comment: rustfs console from the management network
 
+# Kernel command line (playbooks/setup-kernel-cmdline.yml). nvme3 dropped out
+# of md0 on 2026-07-06 with the kernel blaming power management
+# (CSTS=0xffffffff, PCI_STATUS=0x10); SMART is clean on all four drives, so
+# these are the kernel's own suggested mitigation, not a confirmed fix.
+# pcie_aspm/pcie_port_pm are node-wide: the only PCIe devices are the four
+# NVMe behind the ASM1184e switch. The cgroup parameters re-enable the memory
+# controller the Pi kernel disables by default, shared with ai-rpi5-01.
+kernel_cmdline_params:
+  - nvme_core.default_ps_max_latency_us=0
+  - pcie_aspm=off
+  - pcie_port_pm=off
+  - cgroup_enable=memory
+  - cgroup_memory=1
+
 rustfs_config:
   version: "latest"
   port: ":9000"

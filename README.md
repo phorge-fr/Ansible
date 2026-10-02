@@ -32,10 +32,17 @@ docs/                     # manual procedures not yet automated
 | `all` | every host | `setup-alloy.yml` | `grafana.grafana.alloy` |
 | `all` | every host | `setup-hardening.yml` | `ssh_hardening` |
 | `all` | every host | `setup-firewall.yml` (one node at a time, `enforce` on `control`, `core`, `svc` and `storage`, `audit` elsewhere) | `firewall` |
+| `all` | every host | `setup-timesync.yml` (checks clock drift and fixes it in the same run) | - |
+| `svc` | `svc-rock64-01` to `03` (Armbian) | `setup-ramlog.yml` | - |
+| `all` | hosts with `kernel_cmdline_params` (the Raspberry Pi 5 nodes) | `setup-kernel-cmdline.yml` (appends to the boot command line, reports the hosts that need a reboot, never reboots) | `kernel_cmdline` |
 
 `setup-alloy.yml` reads `alloy_config` from `group_vars`. Only `storage` and `compute` define it today, the other groups fall back to the role default (empty configuration).
 
 The `storage` configuration is [playbooks/files/alloy-storage.alloy](playbooks/files/alloy-storage.alloy): host and container metrics to Prometheus, container and journal logs to Loki, both on `core` over HTTPS with the core CA and basic auth. The credentials are vault values of the `storage` group vars, written to `/etc/alloy-secrets.env` (mode `0600`) and read by the service through the environment.
+
+`setup-ramlog.yml` keeps the Armbian ramlog of the `svc` nodes working next to k3s: the kubelet container logs (`/var/log/pods`) are moved to persistent storage via a symlink so they no longer fill the 50 MB zram nor break the logrotate postrotate hook with stale synced files (hosts without the Armbian ramlog script are skipped, so the playbook can run on any group).
+
+`setup-kernel-cmdline.yml` appends kernel parameters to the boot command line of the Raspberry Pi 5 nodes: idempotent, guarded (single line, `root=` kept, `.bak` backup, read-back), and it reports the hosts that need a reboot instead of rebooting them - OS reboots stay under manual control.
 
 `setup-compute.yml` deploys a 3-node Incus HA cluster (`configure-compute.yml` then applies every later config change: ACME, OIDC, Loki, OpenFGA authorization) (Ceph storage, OVN networking) via the vendored [`lxc.incus`](https://github.com/lxc/incus-deploy) collection - see [docs/incus-installation.md](docs/incus-installation.md) for the variable scheme, the prerequisites that still need real values, and `playbooks/teardown-compute.yml`, its destructive counterpart to return a node to a clean state (`-e teardown_confirm=true`).
 
@@ -50,6 +57,7 @@ Project roles, each documented in its own `README.md`:
 - [rustfs](roles/rustfs/README.md)
 - [ssh_hardening](roles/ssh_hardening/README.md)
 - [firewall](roles/firewall/README.md)
+- [kernel_cmdline](roles/kernel_cmdline/README.md)
 
 `hpc-servers` (monitoring and LLM inference stack for the HPC nodes) is not wired to any playbook yet.
 

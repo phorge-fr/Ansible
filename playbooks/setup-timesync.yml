@@ -1,0 +1,105 @@
+---
+- name: Keep every host clock synchronized against the router
+  hosts: all
+  become: true
+  tasks:
+    # The MikroTik router serves NTP on every VLAN (Network repo, ntp.tf + the
+    # ntp-from-phorge input rule) and every host syncs against its own VLAN
+    # gateway, so the whole infra follows one clock view - what Ceph mon quorum
+    # and OVN's clustered databases care about. timesyncd only queries
+    # FallbackNTP when no NTP= server answers, so the pool servers stay a
+    # safety net, not a second source.
+    - name: Configure the time sources
+      ansible.builtin.lineinfile:
+        path: /etc/systemd/timesyncd.conf
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+      loop:
+        - regexp: '^NTP='
+          line: "NTP={{ time_ntp_servers | join(' ') }}"
+        - regexp: '^FallbackNTP='
+          line: "FallbackNTP={{ time_ntp_fallback_servers | join(' ') }}"
+      register: timesync_config
+
+    - name: Restart systemd-timesyncd when its configuration changed
+      ansible.builtin.systemd:
+        name: systemd-timesyncd
+        state: restarted
+      when: timesync_config is changed
+
+    - name: systemd-timesyncd is enabled and running
+      ansible.builtin.systemd:
+        name: systemd-timesyncd
+        enabled: true
+        state: started
+
+    - name: Align the timezone on every host
+      community.general.timezone:
+        name: "{{ time_timezone }}"
+
+    # Check + remediation: a host whose clock is not synchronized gets its
+    # daemon restarted, and a host drifting beyond the threshold gets forced
+    # back to the router, so one run fixes a skewed host without a manual SSH
+    # session. timesyncd itself steps the clock on its next poll once the
+    # daemon is restarted; the final assertion proves the run actually
+    # converged. Skipped in check mode: the shell measurements never run there,
+    # so the assertions would fail on empty registers.
+    - name: Check and fix clock drift, then prove the host converged
+      when: not ansible_check_mode
+      block:
+        - name: Check that the clock is synchronized
+          ansible.builtin.command:
+            cmd: timedatectl show --property=NTPSynchronized --value
+          register: timesync_synchronized
+          changed_when: false
+
+        - name: Force a resync on a host that is not synchronized
+          ansible.builtin.systemd:
+            name: systemd-timesyncd
+            state: restarted
+          when: timesync_synchronized.stdout != 'yes'
+
+        # A freshly restarted timesyncd reports no Offset line until its first
+        # poll exchange completes ("Packet count: 0"); "synchronized" is the
+        # primary check, so a missing offset only blocks when the clock is
+        # supposed to be measured against the threshold - report it as "none".
+        - name: Measure the current offset in milliseconds
+          ansible.builtin.shell: |
+            out=$(timedatectl timesync-status --no-pager 2>/dev/null | awk '/^ *Offset:/ {print $2}')
+            case "$out" in
+              ""|"n/a") echo none ;;
+              *us) awk -v v="${out%us}" 'BEGIN {gsub(",", ".", v); printf "%.3f\n", v / 1000}' ;;
+              *ms) awk -v v="${out%ms}" 'BEGIN {gsub(",", ".", v); printf "%.3f\n", v}' ;;
+              *) echo none ;;
+            esac
+          register: timesync_offset_ms
+          changed_when: false
+
+        - name: Force a resync when the offset exceeds the drift threshold
+          ansible.builtin.systemd:
+            name: systemd-timesyncd
+            state: restarted
+          when: timesync_offset_ms.stdout != 'none' and timesync_offset_ms.stdout | float | abs >= time_max_offset_ms
+
+        - name: Re-measure the offset after the forced resync
+          ansible.builtin.shell: |
+            sleep 5
+            out=$(timedatectl timesync-status --no-pager 2>/dev/null | awk '/^ *Offset:/ {print $2}')
+            case "$out" in
+              ""|"n/a") echo none ;;
+              *us) awk -v v="${out%us}" 'BEGIN {gsub(",", ".", v); printf "%.3f\n", v / 1000}' ;;
+              *ms) awk -v v="${out%ms}" 'BEGIN {gsub(",", ".", v); printf "%.3f\n", v}' ;;
+              *) echo none ;;
+            esac
+          register: timesync_offset_ms_final
+          changed_when: false
+
+        - name: The clock must be synchronized and within the drift threshold
+          ansible.builtin.assert:
+            that:
+              - timesync_synchronized.stdout == 'yes'
+              - timesync_offset_ms_final.stdout == 'none' or timesync_offset_ms_final.stdout | float | abs < time_max_offset_ms
+            fail_msg: >-
+              The clock is still off after a forced resync
+              (offset {{ timesync_offset_ms_final.stdout }} ms, threshold
+              {{ time_max_offset_ms }} ms) - check journalctl -u systemd-timesyncd

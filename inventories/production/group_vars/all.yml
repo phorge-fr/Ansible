@@ -8,3 +8,16 @@ ssh_hardening_password_login_users:
   - user
 ssh_hardening_password_login_sources:
   - "{{ management_network }}"
+
+# Time sync (playbooks/setup-timesync.yml): every host syncs systemd-timesyncd
+# against its own VLAN gateway - the MikroTik router serves NTP on every VLAN
+# (Network repo, ntp.tf + the ntp-from-phorge input rule) - so the whole infra
+# follows ONE clock view, which is what Ceph mon quorum and OVN's clustered
+# databases actually care about. Pool servers are only a timesyncd fallback
+# (queried when no NTP= server answers), not a second source.
+time_timezone: Europe/Paris
+time_ntp_servers:
+  - "{{ ansible_facts['default_ipv4']['gateway'] }}"
+time_ntp_fallback_servers:
+  - fr.pool.ntp.org
+time_max_offset_ms: 50

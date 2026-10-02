@@ -366,6 +366,19 @@
     - name: Fix the Ceph mgr modules on Debian 13
       ansible.builtin.include_tasks: tasks/ceph-mgr-bcrypt-shim.yml
 
+    # lxc.incus.system_settings hardcodes fs.aio-max-nr=524288, but both the
+    # ceph-osd package (1048576, /etc/sysctl.d/30-ceph-osd.conf) and incus-base
+    # (16777216, /usr/lib/sysctl.d/50-incus.conf) ship higher values in their
+    # own sysctl.d files, the incus one being applied last at boot - the
+    # role's value never survives a reboot. Running the role mid-run would
+    # otherwise silently lower the live value until the next reboot. Re-assert
+    # the value the installed packages agree on, after the roles.
+    - name: Keep fs.aio-max-nr at the value the installed packages agree on
+      ansible.posix.sysctl:
+        name: fs.aio-max-nr
+        value: "16777216"
+        state: present
+
 # r8152 applies its firmware patch only when it binds to the device, so a
 # freshly installed firmware-realtek needs the module reloaded (the daemon
 # keeps running whatever it loaded at boot - which was nothing). Separate play

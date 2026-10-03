@@ -11,11 +11,29 @@ services:
     volumes:
       - "{{ rustfs_config.data_path }}:/data"
 
-    environment:  
+    environment:
       - RUSTFS_CONSOLE_ENABLE={{ rustfs_config.enable_console | lower }}
       - RUSTFS_ACCESS_KEY={{ rustfs_config.access_key }}
       - RUSTFS_SECRET_KEY={{ rustfs_config.secret_key }}
+{% if rustfs_obs_endpoint | length > 0 %}
+      # RustFS has no Prometheus endpoint: it only pushes OTLP (traces, metrics
+      # and logs) to this base URL, so collecting its metrics means receiving
+      # them. Points at the gateway of the network below, where Alloy listens.
+      - RUSTFS_OBS_ENDPOINT={{ rustfs_obs_endpoint }}
+{% endif %}
     command:
       - --address=:9000
       - /data
-      
+
+# Pinned rather than left to Docker's address pool. Both ends of the OTLP push
+# name an address from this network - the container reaches Alloy on the
+# gateway, and the host firewall allows that port from this subnet - so a
+# subnet reassigned on a network recreation would break the push silently.
+# These are the values Docker had already assigned, so pinning them changes
+# nothing live and needs no recreation.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: "{{ rustfs_network_subnet }}"
+          gateway: "{{ rustfs_network_gateway }}"

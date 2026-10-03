@@ -2,3 +2,7 @@ exclude_paths:
   - collections/
   - roles/geerlingguy.nfs/
   - roles/rolehippie.mdadm/
+  # Payloads copied to hosts, not Ansible: docker-compose, prometheus and
+  # litellm configs. The yamllint rules ansible-lint applies to playbooks have
+  # no business judging them.
+  - roles/hpc_servers/files/

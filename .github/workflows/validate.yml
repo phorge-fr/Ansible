@@ -1,0 +1,50 @@
+name: Validate
+
+# Gate between the working branches and main. Needs no secrets: vault_pass is
+# gitignored, and neither ansible-lint nor --syntax-check has to decrypt
+# anything to do its job (verified on every playbook, including the
+# vault-heavy compute ones).
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Pinned so a new ansible-lint release cannot turn a green pull request
+      # red on its own. Bumped deliberately, like requirements.yml - Renovate
+      # keeps the action versions above current.
+      - name: Install ansible-core and ansible-lint
+        run: pip install 'ansible-core==2.21.*' 'ansible-lint==26.9.*'
+
+      # collections/ and the vendored roles are gitignored, so a fresh checkout
+      # has neither, and ansible-lint cannot resolve lxc.incus.* or
+      # grafana.grafana.* without them.
+      - name: Install the pinned collections and roles
+        run: ansible-galaxy install -r requirements.yml
+
+      # Reads .ansible-lint for the exclusions. ansible-lint runs yamllint
+      # itself, so there is no separate YAML step.
+      - name: ansible-lint
+        run: ansible-lint
+
+      - name: Syntax-check every playbook
+        run: |
+          for playbook in playbooks/*.yml; do
+            echo "::group::$playbook"
+            ansible-playbook "$playbook" --syntax-check
+            echo "::endgroup::"
+          done

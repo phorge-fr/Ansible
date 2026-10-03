@@ -1,0 +1,133 @@
+---
+# Survey one host before patching it: finish any dpkg transaction a previous
+# run left half-done, then collect everything the plan needs. Read-only apart
+# from that healing step.
+#
+# This is the entry point the playbook calls first, on every targeted host in
+# parallel - nothing here is destructive, so it does not need serialising.
+#
+# Output (consumed by playbooks/patch.yml):
+#   patch_plan_entry        the host's block of lines in the plan
+#   patch_pending           registered apt list --upgradable result
+#   patch_boot_packages     pending packages whose postinst rewrites /boot
+#   patch_broken_before     packages found unconfigured before this run
+
+# A host left in this state is the single most dangerous thing to run an
+# upgrade against: apt would refuse or, worse, pile a second transaction
+# on top of an unfinished one. These are the states svc-rock64-01 was
+# found in (50 unpacked, linux-image half-configured).
+- name: Look for packages left in a broken state by an earlier run
+  ansible.builtin.shell: |
+    set -o pipefail
+    dpkg-query -W -f '${Status}\t${Package}\n' 2>/dev/null \
+      | awk -F'\t' '$1 ~ /(half-configured|half-installed|unpacked|triggers-pending|triggers-awaited)/ {print $2}'
+  args:
+    executable: /bin/bash
+  register: patch_broken_before
+  changed_when: false
+  check_mode: false
+
+- name: Report the broken packages that will be configured first
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: {{ patch_broken_before.stdout_lines | length }}
+      package(s) left unconfigured by an earlier run
+      ({{ patch_broken_before.stdout_lines[:8] | join(', ') }}{{ ', ...' if patch_broken_before.stdout_lines | length > 8 else '' }})
+      - finishing that transaction before anything else
+  when: patch_broken_before.stdout_lines | length > 0
+
+- name: Finish the interrupted transaction
+  ansible.builtin.include_tasks: apt-detached.yml
+  vars:
+    patch_detached_name: configure
+    patch_detached_command: dpkg --configure -a
+  when: patch_broken_before.stdout_lines | length > 0 and not ansible_check_mode
+
+- name: Re-check the package states after healing
+  ansible.builtin.shell: |
+    set -o pipefail
+    dpkg-query -W -f '${Status}\t${Package}\n' 2>/dev/null \
+      | awk -F'\t' '$1 ~ /(half-configured|half-installed|unpacked|triggers-pending|triggers-awaited)/ {print $2}'
+  args:
+    executable: /bin/bash
+  register: patch_broken_after
+  changed_when: false
+  check_mode: false
+  when: patch_broken_before.stdout_lines | length > 0 and not ansible_check_mode
+
+- name: Refuse to patch a host whose dpkg state is still broken
+  ansible.builtin.assert:
+    that: patch_broken_after.stdout_lines | length == 0
+    fail_msg: >-
+      {{ inventory_hostname }} still has
+      {{ patch_broken_after.stdout_lines | length }} package(s) in a broken
+      state after `dpkg --configure -a`
+      ({{ patch_broken_after.stdout_lines[:8] | join(', ') }}). Fix it by
+      hand before patching - see /var/log/phorge-patch-configure.log.
+    quiet: true
+  when: patch_broken_before.stdout_lines | length > 0 and not ansible_check_mode
+
+# Regenerating an initramfs needs room in /boot, and a kernel upgrade that
+# runs out of space mid-way is exactly how a half-written initrd happens.
+- name: Read the free space on /boot and /
+  ansible.builtin.shell: |
+    set -o pipefail
+    for m in /boot /; do
+      printf '%s %s\n' "$m" "$(df -BM --output=avail "$m" 2>/dev/null | tail -1 | tr -dc '0-9')"
+    done
+  args:
+    executable: /bin/bash
+  register: patch_space
+  changed_when: false
+  check_mode: false
+
+- name: Record the free space per mount point
+  ansible.builtin.set_fact:
+    patch_free: "{{ dict(patch_space.stdout_lines | map('split', ' ') | list) }}"
+
+- name: Refresh the apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+# Parsed on the host with awk - "pkg/repo version arch [...]" becomes
+# "pkg version". Filtering on a "/" in the first field skips apt's
+# localized headers ("Listing...", "En train de construire...") regardless
+# of the host's locale.
+- name: List the upgradable packages as "name version"
+  ansible.builtin.shell: |
+    set -o pipefail
+    apt list --upgradable 2>/dev/null | awk '$1 ~ /\// {split($1, a, "/"); print a[1], $2}'
+  args:
+    executable: /bin/bash
+  register: patch_pending
+  changed_when: false
+  check_mode: false
+
+# These are the packages whose postinst rewrites /boot. They are the ones
+# that can leave a host unbootable, so the plan calls them out instead of
+# burying them in a package count.
+- name: Record which pending packages rewrite /boot
+  ansible.builtin.set_fact:
+    patch_boot_packages: >-
+      {{ patch_pending.stdout_lines | map('split', ' ') | map('first')
+         | select('match', patch_boot_packages_regex)
+         | list }}
+
+- name: Check the reboot-required flag
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: patch_reboot_required
+
+- name: Build this host's plan entry
+  ansible.builtin.set_fact:
+    patch_plan_entry: >-
+      {{ [inventory_hostname ~ ' - ' ~ (patch_pending.stdout_lines | length) ~ ' packages pending'
+          ~ ' - reboot flagged: ' ~ patch_reboot_required.stat.exists
+          ~ ' - /boot free: ' ~ (patch_free['/boot'] | default('?')) ~ 'M']
+         + (['  !! REWRITES /boot: ' ~ (patch_boot_packages | join(', '))] if patch_boot_packages | length > 0 else [])
+         + (['  !! /boot has only ' ~ patch_free['/boot'] ~ 'M free, a kernel upgrade needs room']
+            if (patch_boot_packages | length > 0 and (patch_free['/boot'] | default('9999') | int) < patch_min_boot_free_mb) else [])
+         + (['  !! healed ' ~ (patch_broken_before.stdout_lines | length) ~ ' package(s) left broken by an earlier run']
+            if patch_broken_before.stdout_lines | length > 0 else [])
+         + patch_pending.stdout_lines }}

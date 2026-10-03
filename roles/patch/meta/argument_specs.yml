@@ -1,0 +1,50 @@
+---
+# One spec per entry point, so a caller that forgets an argument gets a clear
+# failure instead of a shell command built from an empty variable.
+argument_specs:
+  survey:
+    short_description: Heal a half-finished dpkg transaction, then collect what the plan needs
+    description:
+      - Finishes any dpkg transaction a previous run left unconfigured, then
+        reads the pending packages, the free space and the reboot flag.
+      - Refuses the host if it is still in a broken state after healing.
+      - Safe to run on every host in parallel.
+    options:
+      patch_detached_timeout:
+        type: int
+        default: 3600
+        description: Seconds to follow the healing run before leaving it to systemd.
+      patch_min_boot_free_mb:
+        type: int
+        default: 80
+        description: Free space in /boot below which a kernel upgrade is flagged in the plan.
+      patch_boot_packages_regex:
+        type: str
+        description: Matches the pending packages whose postinst rewrites /boot.
+
+  apt-detached:
+    short_description: Run one apt or dpkg command as a transient systemd unit
+    description:
+      - Runs the command under systemd rather than as a child of the SSH
+        session, so losing the connection cannot stop dpkg half-way.
+      - An in-progress run from an earlier play is resumed, never restarted.
+    options:
+      patch_detached_name:
+        type: str
+        required: true
+        description: Short suffix for the unit, the staged script and the log.
+      patch_detached_command:
+        type: str
+        required: true
+        description: The command line to run, as it would be typed on the host.
+      patch_detached_timeout:
+        type: int
+        default: 3600
+        description: Seconds to follow the run before leaving it to systemd and reporting rc 124.
+
+  check-boot-consistency:
+    short_description: Assert that /boot can still boot
+    description:
+      - Looks for a dangling symlink, a half-written file, an empty kernel or
+        initramfs artifact, and a newest kernel with no usable initramfs.
+      - Sets patch_boot_problems, empty when /boot looks sane. Read-only.

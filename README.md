@@ -33,6 +33,7 @@ docs/                     # manual procedures not yet automated
 | `all` | every host | `setup-hardening.yml` | `ssh_hardening` |
 | `all` | every host | `setup-firewall.yml` (one node at a time, `enforce` on `control`, `core`, `svc` and `storage`, `audit` elsewhere) | `firewall` |
 | `all` | every host | `setup-timesync.yml` (checks clock drift and fixes it in the same run) | - |
+| `all` | every host | `patch.yml` (interactive, one host at a time: asks before upgrading and before rebooting each host) | `patch` |
 | `svc` | `svc-rock64-01` to `03` (Armbian) | `setup-ramlog.yml` | - |
 | `all` | hosts with `kernel_cmdline_params` (the Raspberry Pi 5 nodes) | `setup-kernel-cmdline.yml` (appends to the boot command line, reports the hosts that need a reboot, never reboots) | `kernel_cmdline` |
 
@@ -43,6 +44,8 @@ The `storage` configuration is [playbooks/files/alloy-storage.alloy](playbooks/f
 `setup-ramlog.yml` keeps the Armbian ramlog of the `svc` nodes working next to k3s: the kubelet container logs (`/var/log/pods`) are moved to persistent storage via a symlink so they no longer fill the 50 MB zram nor break the logrotate postrotate hook with stale synced files (hosts without the Armbian ramlog script are skipped, so the playbook can run on any group).
 
 `setup-kernel-cmdline.yml` appends kernel parameters to the boot command line of the Raspberry Pi 5 nodes: idempotent, guarded (single line, `root=` kept, `.bak` backup, read-back), and it reports the hosts that need a reboot instead of rebooting them - OS reboots stay under manual control.
+
+`patch.yml` is the manual, interactive patch tool: it reports the pending apt updates, the packages that rewrite `/boot` and the reboot flag of every targeted host as one plan, asks a single yes/no to apply it (a refusal ends the run without touching anything), then patches the hosts **one at a time** - upgrading each, proving dpkg finished and `/boot` is still bootable, asking whether to reboot it, and waiting for it to come back healthy before touching the next. The first failure stops the rollout. The upgrade runs as a transient systemd unit rather than a child of the SSH session, so a dropped connection or a Ctrl-C can no longer leave dpkg half-way - which is what left `svc-rock64-01` unbootable on 2026-10-03. It sets up no automatic update mechanism of any kind: patching stays a hand-run action during a planned maintenance window. See [docs/patch-management.md](docs/patch-management.md) for the flow and the run commands, and [roles/patch](roles/patch/README.md) for the three entry points it is built from.
 
 `setup-compute.yml` deploys a 3-node Incus HA cluster (`configure-compute.yml` then applies every later config change: ACME, OIDC, Loki, OpenFGA authorization) (Ceph storage, OVN networking) via the vendored [`lxc.incus`](https://github.com/lxc/incus-deploy) collection - see [docs/incus-installation.md](docs/incus-installation.md) for the variable scheme, the prerequisites that still need real values, and `playbooks/teardown-compute.yml`, its destructive counterpart to return a node to a clean state (`-e teardown_confirm=true`).
 
@@ -58,6 +61,7 @@ Project roles, each documented in its own `README.md`:
 - [ssh_hardening](roles/ssh_hardening/README.md)
 - [firewall](roles/firewall/README.md)
 - [kernel_cmdline](roles/kernel_cmdline/README.md)
+- [patch](roles/patch/README.md)
 
 `hpc_servers` (monitoring and LLM inference stack for the HPC nodes) is not wired to any playbook yet.
 

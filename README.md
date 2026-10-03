@@ -27,7 +27,7 @@ docs/                     # manual procedures not yet automated
 |---|---|---|---|
 | `control`, `core`, `svc` | k0s cluster nodes (managed by FrontPlane) | `setup-alloy.yml` only | `grafana.grafana.alloy` |
 | `storage` | `stor-rpi5-01` | `setup-storage.yml` | `rolehippie.mdadm`, `geerlingguy.nfs`, `docker`, `rustfs` |
-| `hpc` (`hpc-gpu`, `hpc-npu`) | `ai-z440-01`, `ai-rpi5-01` | `setup-hpc.yml` | `docker`, `rocm_drivers`, `nvidia_drivers`, `nvidia_container_toolkit` |
+| `hpc` (`hpc-gpu`, `hpc-npu`) | `ai-z440-01`, `ai-rpi5-01` | none yet, see the note under Roles | - |
 | `compute` | `comp-opti-01` to `03` | `setup-compute.yml` (bootstrap), `configure-compute.yml` (day-2 config), see [docs/incus-installation.md](docs/incus-installation.md) | `lxc.incus.system_settings`, `lxc.incus.ceph`, `lxc.incus.ovn`, `lxc.incus.incus` |
 | `all` | every host | `setup-alloy.yml` | `grafana.grafana.alloy` |
 | `all` | every host | `setup-hardening.yml` | `ssh_hardening` |
@@ -63,7 +63,7 @@ Project roles, each documented in its own `README.md`:
 - [kernel_cmdline](roles/kernel_cmdline/README.md)
 - [patch](roles/patch/README.md)
 
-`hpc_servers` (monitoring and LLM inference stack for the HPC nodes) is not wired to any playbook yet.
+No playbook applies anything to the `hpc` group. `setup-hpc.yml` used to apply `docker`, `rocm_drivers`, `nvidia_drivers` and `nvidia_container_toolkit` to every host of the group at once, which was wrong for `ai-rpi5-01` - a Pi has no discrete GPU and needs neither the ROCm nor the NVIDIA stack. The roles are kept, and so is `hpc_servers` (monitoring and LLM inference stack), ready for a playbook that targets `hpc-gpu` and `hpc-npu` separately.
 
 External roles and collections are pinned in `requirements.yml`. To upgrade one, bump its version there and run `ansible-galaxy install -r requirements.yml --force`.
 

@@ -1,9 +1,0 @@
----
-- name: Patch Management - Apply Updates & Patches
-  hosts: hpc
-  become: true
-  roles:
-    - docker
-    - rocm_drivers
-    - nvidia_drivers
-    - nvidia_container_toolkit

@@ -1,0 +1,130 @@
+---
+# Longhorn node prerequisites on the core cluster (issue #34).
+#
+# Longhorn checks for these on the host itself and reports the result on each
+# nodes.longhorn.io object. Both were False on the three core nodes:
+#   RequiredPackages    PackagesNotInstalled   Missing packages: [nfs-common cryptsetup]
+#   KernelModulesLoaded KernelModulesNotLoaded Kernel modules [dm_crypt] are not loaded
+#
+# RequiredPackages gates RWX volumes - the share manager exports them over NFS
+# and the workload node mounts them - and an NFS backup target. The S3 backup
+# target to rustfs (phorge-fr/Frontplane#39) does not need it. The kernel
+# module gates encrypted volumes.
+#
+# Nothing needed either when this was written: six volumes on core, all RWO,
+# none encrypted, and the alerts of Frontplane#61 only look at the ready and
+# schedulable conditions, so neither condition was firing anything. This makes
+# the capability available instead of leaving a confusing failure for the day
+# someone creates an RWX or encrypted PVC, and clears two conditions that
+# would otherwise stay red forever - red conditions nobody acts on are how you
+# learn to ignore red conditions.
+#
+# No reboot and no initramfs rebuild: cryptsetup only *suggests*
+# cryptsetup-initramfs (checked on the node, with APT::Install-Suggests "0"),
+# so the package that would regenerate the initramfs is not pulled in.
+#
+# The two conditions do NOT clear on their own once this has run. Longhorn
+# evaluates them when longhorn-manager starts, so the pod on each node has to
+# be restarted for the node object to catch up - the lastTransitionTime on an
+# untouched cluster is months old. The data path is served by the
+# instance-manager pods, not by longhorn-manager, so the restart does not
+# interrupt I/O (checked: six volumes stayed healthy across all three):
+#
+#   kubectl -n longhorn-system delete pod -l app=longhorn-manager --field-selector spec.nodeName=<node>
+#
+#   ansible-playbook playbooks/setup-longhorn-nodes.yml
+
+- name: Longhorn - Install the node prerequisites
+  hosts: core
+  become: true
+  gather_facts: false
+  vars:
+    # rpcbind comes in as a dependency of nfs-common and would run as a
+    # listening service on 111. Longhorn's share manager serves NFSv4, which
+    # needs only 2049 and no portmapper, and the node condition looks for the
+    # binaries rather than a running service - so it is turned off here.
+    # Set to false if something ever needs NFSv3 on these nodes.
+    longhorn_disable_rpcbind: true
+  tasks:
+    - name: Install the packages Longhorn expects on the node
+      ansible.builtin.apt:
+        name:
+          - nfs-common
+          - cryptsetup
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    # modules-load.d for every boot, plus an explicit load so the condition
+    # clears in this run rather than at the next reboot.
+    - name: Load dm_crypt at boot
+      ansible.builtin.copy:
+        dest: /etc/modules-load.d/longhorn.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by Ansible (playbooks/setup-longhorn-nodes.yml).
+          # Longhorn needs dm_crypt on the node for encrypted volumes.
+          dm_crypt
+
+    - name: Load dm_crypt now
+      community.general.modprobe:
+        name: dm_crypt
+        state: present
+
+    # Asked rather than assumed: rpcbind only exists once nfs-common has pulled
+    # it in, so under --check - where nothing is installed - the units are
+    # absent, and acting on them blind fails the whole preview. The module
+    # reports LoadState "not-found" for a unit that does not exist.
+    - name: Look for the rpcbind units
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+      register: longhorn_rpcbind
+      changed_when: false
+      check_mode: false
+      loop:
+        - rpcbind.socket
+        - rpcbind.service
+      when: longhorn_disable_rpcbind
+
+    - name: Turn rpcbind off
+      ansible.builtin.systemd:
+        name: "{{ item.item }}"
+        enabled: false
+        state: stopped
+      loop: "{{ longhorn_rpcbind.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item | default('-') }}"
+      when:
+        - longhorn_disable_rpcbind
+        - item.status is defined
+        - (item.status.LoadState | default('not-found')) != 'not-found'
+
+    # Read back what Longhorn itself looks for, rather than trusting that the
+    # package manager and modprobe did what they said. Skipped under --check,
+    # where none of it was applied and the answer would only be misleading.
+    - name: Check that the binaries Longhorn looks for are on the node
+      ansible.builtin.shell: |
+        for b in mount.nfs4 cryptsetup; do
+          command -v "$b" >/dev/null || { echo "missing: $b"; exit 1; }
+        done
+        echo "both present"
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Read the loaded kernel modules
+      ansible.builtin.command: /sbin/lsmod
+      changed_when: false
+      check_mode: false
+      register: longhorn_lsmod
+      when: not ansible_check_mode
+
+    - name: Fail when dm_crypt did not load
+      ansible.builtin.assert:
+        that: longhorn_lsmod.stdout is search('^dm_crypt', multiline=True)
+        fail_msg: "{{ inventory_hostname }}: dm_crypt is still not loaded"
+        quiet: true
+      when: not ansible_check_mode

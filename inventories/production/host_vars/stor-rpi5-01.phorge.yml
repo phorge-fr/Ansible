@@ -24,6 +24,14 @@ firewall_allowed_ports:
     sources:
       - 10.3.0.1-10.3.0.3
     comment: NFSv4 from the svc cluster nodes
+  # rustfs has no Prometheus endpoint, it pushes OTLP instead, so the metrics
+  # travel container -> host and land in the input chain with the container's
+  # address as source. Alloy listens on the gateway of that network only.
+  - proto: tcp
+    ports: [4318]
+    sources:
+      - 172.18.0.0/16
+    comment: OTLP metrics pushed by the rustfs container to Alloy
 
 # Docker-published ports reach the container through the forward chain, not the input one
 firewall_published_ports:
@@ -74,3 +82,7 @@ rustfs_config:
           3637373932306635650a626530303533653934643635313963613563633333643839383765626633
           63393431303337383237656437393766383334363466653431623537376461386636396333393835
           6637663834643564323338353638373061353437326262363230
+
+# rustfs has no Prometheus endpoint, so Alloy receives its OTLP push instead.
+# The gateway of the compose network, where Alloy binds its OTLP receiver.
+rustfs_obs_endpoint: "http://172.18.0.1:4318"

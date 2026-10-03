@@ -107,6 +107,51 @@ prometheus.scrape "cadvisor" {
   forward_to = [prometheus.remote_write.core.receiver]
 }
 
+// RustFS metrics (OTLP push)
+
+// RustFS exposes no Prometheus endpoint - checked on the running binary, whose
+// only observability option is --obs-endpoint, "Root OTLP endpoint for traces,
+// metrics, and logs". So nothing can scrape it: Alloy has to receive instead,
+// which is what an OTel collector distribution is for.
+//
+// Bound to the gateway of the rustfs compose network rather than 0.0.0.0, so
+// the receiver is reachable from that container and from nothing else. The host
+// firewall allows this port from that subnet only (host_vars/stor-rpi5-01).
+otelcol.receiver.otlp "rustfs" {
+  http {
+    endpoint = "172.18.0.1:4318"
+  }
+
+  output {
+    metrics = [otelcol.processor.batch.rustfs.input]
+  }
+}
+
+otelcol.processor.batch "rustfs" {
+  output {
+    metrics = [otelcol.exporter.prometheus.rustfs.input]
+  }
+}
+
+otelcol.exporter.prometheus "rustfs" {
+  forward_to = [prometheus.relabel.rustfs.receiver]
+}
+
+// The OTLP resource attributes decide the labels, and RustFS sets its own, so
+// job and instance are forced here to match every other series of this node.
+prometheus.relabel "rustfs" {
+  forward_to = [prometheus.remote_write.core.receiver]
+
+  rule {
+    target_label = "job"
+    replacement  = "rustfs"
+  }
+  rule {
+    target_label = "instance"
+    replacement  = constants.hostname
+  }
+}
+
 // Container logs
 
 discovery.docker "containers" {

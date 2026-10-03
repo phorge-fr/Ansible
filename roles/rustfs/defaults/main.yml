@@ -1,3 +1,7 @@
+# Legacy single-dict config. Beware when adding a key here: a host_vars
+# rustfs_config replaces this dict wholesale rather than merging with it, so a
+# key added only here is undefined on every host that sets the dict. New
+# options go in their own rustfs_* variable below instead.
 rustfs_config:
   version: "latest"
   port: ":9000"
@@ -6,3 +10,16 @@ rustfs_config:
   enable_console: true
   access_key: "your_access_key"
   secret_key: "your_secret_key"
+
+# Base OTLP endpoint RustFS pushes traces, metrics and logs to. Empty leaves
+# the variable unset and RustFS pushes nothing. There is no Prometheus endpoint
+# to scrape instead - see the README.
+rustfs_obs_endpoint: ""
+
+# Subnet of the compose network, pinned rather than left to Docker's address
+# pool: both ends of the OTLP push name an address from it - the container
+# reaches the collector on the gateway, and the host firewall allows that port
+# from this subnet - so a subnet reassigned on a network recreation would break
+# the push silently. These are the values Docker assigns by default anyway.
+rustfs_network_subnet: "172.18.0.0/16"
+rustfs_network_gateway: "172.18.0.1"

@@ -59,7 +59,7 @@ Project roles, each documented in its own `README.md`:
 - [firewall](roles/firewall/README.md)
 - [kernel_cmdline](roles/kernel_cmdline/README.md)
 
-`hpc-servers` (monitoring and LLM inference stack for the HPC nodes) is not wired to any playbook yet.
+`hpc_servers` (monitoring and LLM inference stack for the HPC nodes) is not wired to any playbook yet.
 
 External roles and collections are pinned in `requirements.yml`. To upgrade one, bump its version there and run `ansible-galaxy install -r requirements.yml --force`.
 
@@ -126,5 +126,3 @@ ansible-playbook playbooks/<playbook>.yml --list-hosts
 `--list-hosts` must list at least one host: a playbook whose `hosts:` pattern matches no inventory group is skipped silently.
 
 The first two are also enforced by CI: [.github/workflows/validate.yml](.github/workflows/validate.yml) runs `ansible-lint` and `--syntax-check` on every pull request to `main` and on every push to `dev`. It needs no secrets - `vault_pass` is gitignored, and neither check has to decrypt anything - but it does install the pinned collections from `requirements.yml`, since `collections/` is gitignored and a fresh checkout cannot resolve `lxc.incus.*` or `grafana.grafana.*` without them.
-
-`role-name` is in `warn_list` for one known violation: `hpc-servers` predates the `snake_case` convention and is referenced by `setup-hpc.yml`, so renaming it is a deliberate change rather than a lint fix.

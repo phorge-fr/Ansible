@@ -5,10 +5,4 @@ exclude_paths:
   # Payloads copied to hosts, not Ansible: docker-compose, prometheus and
   # litellm configs. The yamllint rules ansible-lint applies to playbooks have
   # no business judging them.
-  - roles/hpc-servers/files/
-
-# hpc-servers predates the snake_case convention and is referenced by
-# setup-hpc.yml, so renaming it is a deliberate change rather than a lint fix.
-# Warn until that call is made, instead of failing every run.
-warn_list:
-  - role-name
+  - roles/hpc_servers/files/

@@ -15,3 +15,10 @@ patch_min_boot_free_mb: 80
 # can leave a host unbootable, so the plan names them instead of burying them
 # in a package count.
 patch_boot_packages_regex: '^(linux-image|linux-headers|linux-base|initramfs-tools|armbian-bsp|armbian-firmware|raspi-firmware|u-boot)'
+
+# Packages a dedicated playbook owns, which patch.yml flags in the plan instead
+# of upgrading in place. Empty means nothing is special-cased. Set per group -
+# see group_vars/compute.yml, where upgrading Incus through a per-node rolling
+# run would block the cluster between nodes.
+patch_handover_regex: ""
+patch_handover_playbook: ""

@@ -1,0 +1,295 @@
+---
+# Rolling upgrade of the Incus, Ceph and OVN packages on the compute nodes
+# (issue #18). setup-compute.yml installs them once and never touches them
+# again - lxc.incus.incus's bootstrap is gated on the package going from
+# absent to present - so nothing here upgraded them afterwards.
+#
+#   preview:  ansible-playbook playbooks/upgrade-compute.yml --check
+#   run:      ansible-playbook playbooks/upgrade-compute.yml
+#
+# TWO PHASES, because the components do not share the same tolerance for
+# running mixed versions across the cluster:
+#
+#   Ceph, OVN and Open vSwitch tolerate it. They are rolled ONE NODE AT A TIME
+#   with a health gate between nodes, which is what the issue asked for.
+#
+#   Incus does NOT. A member upgraded ahead of the others blocks the cluster
+#   until every member reaches the same version - the daemon waits on purpose.
+#   So its packages are upgraded on all three members in one sweep, with no
+#   prompt in between: stopping half way would leave the cluster blocked for
+#   as long as someone takes to answer. This is the opposite of the
+#   per-node confirmation patch.yml uses, and the reason the issue's third
+#   checkbox said to check the skew tolerance before writing the task order.
+#
+# Ceph first, Incus last: the rolling, health-gated part runs while the
+# cluster is still fully operational, and the one step that cannot be paused
+# happens on a cluster that has just been verified healthy.
+#
+# The health gate is NOT "ceph health == HEALTH_OK". This cluster sits on
+# HEALTH_WARN for a BlueStore slow-op alert on osd.1, so gating on OK would
+# refuse to run at all. It gates on invariants - every mon in quorum, every
+# OSD up and in, every PG active+clean, every Incus member online, a leader on
+# both OVN raft rings - and reports the health string so a change against the
+# baseline is visible. See playbooks/tasks/check-compute-health.yml.
+#
+# The upgrades run through the patch role's apt-detached entry point, so a
+# dropped connection cannot leave dpkg half-finished on a Ceph mon or an Incus
+# database member. Same reasoning as patch.yml, higher stakes.
+
+- name: Compute - Survey the pending upgrades and the cluster health
+  hosts: compute
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Refresh the apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: List the upgradable packages
+      ansible.builtin.shell: |
+        set -o pipefail
+        apt list --upgradable 2>/dev/null | awk '$1 ~ /\// {split($1, a, "/"); print a[1]}'
+      args:
+        executable: /bin/bash
+      register: upgrade_compute_pending
+      changed_when: false
+      check_mode: false
+
+    - name: Split the pending packages by component
+      ansible.builtin.set_fact:
+        upgrade_compute_storage: "{{ upgrade_compute_pending.stdout_lines | select('match', upgrade_compute_regex_storage) | list }}"
+        upgrade_compute_network: "{{ upgrade_compute_pending.stdout_lines | select('match', upgrade_compute_regex_network) | list }}"
+        upgrade_compute_incus: "{{ upgrade_compute_pending.stdout_lines | select('match', upgrade_compute_regex_incus) | list }}"
+
+    - name: Read the cluster health as a baseline  # noqa: run-once[task]
+      ansible.builtin.include_tasks: tasks/check-compute-health.yml
+      run_once: true
+
+    - name: Remember the baseline
+      ansible.builtin.set_fact:
+        upgrade_compute_baseline: "{{ hostvars[ansible_play_hosts[0]].patch_compute_health }}"
+
+    - name: Refuse to start on a cluster that is not already whole  # noqa: run-once[task]
+      ansible.builtin.assert:
+        that: upgrade_compute_baseline.invariants_ok | default(false)
+        fail_msg: >-
+          The compute cluster is not in a state to be upgraded:
+          mons {{ upgrade_compute_baseline.mons_quorum | default('?') }}/{{ upgrade_compute_baseline.mons_total | default('?') }} in quorum,
+          OSDs {{ upgrade_compute_baseline.osds_up | default('?') }}/{{ upgrade_compute_baseline.osds_total | default('?') }} up,
+          PGs {{ upgrade_compute_baseline.pgs_clean | default('?') }}/{{ upgrade_compute_baseline.pgs_total | default('?') }} active+clean,
+          Incus members {{ upgrade_compute_baseline.incus_online | default('?') }}/{{ upgrade_compute_baseline.incus_members | default('?') }} online,
+          OVN leaders nb={{ upgrade_compute_baseline.ovn_nb_leader | default('') }} sb={{ upgrade_compute_baseline.ovn_sb_leader | default('') }}.
+          Fix that first - an upgrade takes a node down and this cluster has no
+          spare replica.
+        quiet: true
+      run_once: true
+
+    - name: Warn when a previous run left noout set  # noqa: run-once[task]
+      ansible.builtin.debug:
+        msg: >-
+          Ceph still has the noout flag set, which an interrupted run of this
+          playbook leaves behind. It is unset at the end of each node here, but
+          check why it was still set.
+      when: upgrade_compute_baseline.ceph_noout | default(false)
+      run_once: true
+
+    - name: Build this host's plan entry
+      ansible.builtin.set_fact:
+        upgrade_compute_plan: >-
+          {{ [inventory_hostname
+              ~ ' - ceph/ovs: ' ~ ((upgrade_compute_storage + upgrade_compute_network) | length)
+              ~ ' - incus: ' ~ (upgrade_compute_incus | length)]
+             + (['  rolled one node at a time: ' ~ ((upgrade_compute_storage + upgrade_compute_network) | join(', '))]
+                if (upgrade_compute_storage + upgrade_compute_network) | length > 0 else [])
+             + (['  !! swept across all members at once, the cluster blocks on mixed versions: '
+                 ~ (upgrade_compute_incus | join(', '))]
+                if upgrade_compute_incus | length > 0 else []) }}
+
+- name: Compute - Propose the plan and wait for one decision
+  hosts: compute
+  gather_facts: false
+  strategy: linear
+  tasks:
+    - name: Show the cluster baseline  # noqa: run-once[task]
+      ansible.builtin.debug:
+        msg: >-
+          baseline: ceph {{ upgrade_compute_baseline.ceph_status }},
+          mons {{ upgrade_compute_baseline.mons_quorum }}/{{ upgrade_compute_baseline.mons_total }},
+          OSDs {{ upgrade_compute_baseline.osds_up }}/{{ upgrade_compute_baseline.osds_total }},
+          PGs {{ upgrade_compute_baseline.pgs_clean }}/{{ upgrade_compute_baseline.pgs_total }} active+clean,
+          Incus {{ upgrade_compute_baseline.incus_online }}/{{ upgrade_compute_baseline.incus_members }} online
+      run_once: true
+
+    - name: Show the plan host by host  # noqa: run-once[task]
+      ansible.builtin.debug:
+        msg: "{{ hostvars[item].upgrade_compute_plan }}"
+      loop: "{{ ansible_play_hosts }}"
+      run_once: true
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Ask once whether to apply the upgrade  # noqa: run-once[task]
+      ansible.builtin.pause:
+        prompt: |-
+          Ceph, OVN and Open vSwitch roll one node at a time, health-gated.
+          Incus is then swept across all {{ ansible_play_hosts | length }} members without pausing -
+          the cluster stays blocked while their versions differ, so this part
+          must not be interrupted. Make sure you can see it through.
+          Apply? [yes/no]
+      register: upgrade_compute_decision
+      run_once: true
+      when: not ansible_check_mode
+
+    - name: Remember the decision on every host
+      ansible.builtin.set_fact:
+        upgrade_compute_apply: "{{ (hostvars[ansible_play_hosts[0]].upgrade_compute_decision.user_input | default('') | trim | lower) in ['yes', 'y', 'oui'] }}"
+
+    - name: Stop the run when the plan is refused
+      ansible.builtin.meta: end_host
+      when: not ansible_check_mode and not (upgrade_compute_apply | bool)
+
+- name: Compute - Upgrade Ceph, OVN and Open vSwitch one node at a time
+  hosts: compute
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - name: Roll this node
+      when:
+        - not ansible_check_mode
+        - upgrade_compute_apply | default(false) | bool
+        - (upgrade_compute_storage + upgrade_compute_network) | length > 0
+      block:
+        # An OSD restarting during the package upgrade would otherwise be
+        # marked out after mon_osd_down_out_interval and trigger a pointless
+        # rebalance across a cluster that has exactly one OSD per host.
+        - name: Hold Ceph back from rebalancing during the upgrade
+          ansible.builtin.command: ceph osd set noout
+          changed_when: true
+
+        - name: Upgrade the Ceph, OVN and Open vSwitch packages
+          ansible.builtin.include_role:
+            name: patch
+            tasks_from: apt-detached
+          vars:
+            patch_detached_name: compute-storage-network
+            patch_detached_command: >-
+              apt-get -y --only-upgrade
+              -o Dpkg::Options::=--force-confdef
+              -o Dpkg::Options::=--force-confold
+              install {{ (upgrade_compute_storage + upgrade_compute_network) | join(' ') }}
+            patch_detached_timeout: 3600
+
+        - name: Fail when the upgrade did not finish cleanly
+          ansible.builtin.assert:
+            that: patch_detached.rc == 0
+            fail_msg: >-
+              {{ inventory_hostname }}: apt exited {{ patch_detached.rc }}.
+              {{ 'Still running under systemd and left alone - re-run to pick it up.'
+                 if patch_detached.rc == 124
+                 else 'See /var/log/phorge-patch-compute-storage-network.log.' }}
+            quiet: true
+
+      always:
+        # Always, so an abort in the middle does not leave the flag set and
+        # quietly disable Ceph's own recovery.
+        - name: Let Ceph rebalance again
+          ansible.builtin.command: ceph osd unset noout
+          changed_when: true
+
+    - name: Wait for the cluster to be whole again before the next node
+      ansible.builtin.include_tasks: tasks/check-compute-health.yml
+      vars:
+        compute_health_retries: 40
+        compute_health_delay: 15
+      when:
+        - not ansible_check_mode
+        - upgrade_compute_apply | default(false) | bool
+
+    - name: Fail when the cluster did not come back
+      ansible.builtin.assert:
+        that: patch_compute_health.invariants_ok | default(false)
+        fail_msg: >-
+          {{ inventory_hostname }} was upgraded but the cluster did not come
+          back whole within 10 minutes - stopping before the next node.
+          ceph {{ patch_compute_health.ceph_status | default('?') }},
+          mons {{ patch_compute_health.mons_quorum | default('?') }}/{{ patch_compute_health.mons_total | default('?') }},
+          OSDs {{ patch_compute_health.osds_up | default('?') }}/{{ patch_compute_health.osds_total | default('?') }},
+          PGs {{ patch_compute_health.pgs_clean | default('?') }}/{{ patch_compute_health.pgs_total | default('?') }} active+clean.
+        quiet: true
+      when:
+        - not ansible_check_mode
+        - upgrade_compute_apply | default(false) | bool
+
+- name: Compute - Upgrade Incus on every member in one sweep
+  hosts: compute
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    # No serial and no prompt on purpose: the cluster is blocked for as long as
+    # the members disagree on the version, so this runs on all of them together
+    # and nothing is allowed to pause in the middle.
+    - name: Upgrade the Incus packages on all members at once
+      ansible.builtin.include_role:
+        name: patch
+        tasks_from: apt-detached
+      vars:
+        patch_detached_name: compute-incus
+        patch_detached_command: >-
+          apt-get -y --only-upgrade
+          -o Dpkg::Options::=--force-confdef
+          -o Dpkg::Options::=--force-confold
+          install {{ upgrade_compute_incus | join(' ') }}
+        patch_detached_timeout: 3600
+      when:
+        - not ansible_check_mode
+        - upgrade_compute_apply | default(false) | bool
+        - upgrade_compute_incus | length > 0
+
+    - name: Wait for every member to be operational again  # noqa: run-once[task]
+      ansible.builtin.include_tasks: tasks/check-compute-health.yml
+      vars:
+        compute_health_retries: 40
+        compute_health_delay: 15
+      run_once: true
+      when:
+        - not ansible_check_mode
+        - upgrade_compute_apply | default(false) | bool
+        - upgrade_compute_incus | length > 0
+
+    - name: Fail when the cluster stayed blocked  # noqa: run-once[task]
+      ansible.builtin.assert:
+        that: patch_compute_health.invariants_ok | default(false)
+        fail_msg: >-
+          The Incus sweep finished but the cluster is not whole:
+          Incus {{ patch_compute_health.incus_online | default('?') }}/{{ patch_compute_health.incus_members | default('?') }} online,
+          ceph {{ patch_compute_health.ceph_status | default('?') }}.
+          A member left behind on an older version keeps the cluster blocked -
+          check `incus cluster list` and the version on each node.
+        quiet: true
+      run_once: true
+      when:
+        - not ansible_check_mode
+        - upgrade_compute_apply | default(false) | bool
+        - upgrade_compute_incus | length > 0
+
+- name: Compute - Summarize the run
+  hosts: compute
+  gather_facts: false
+  strategy: linear
+  tasks:
+    - name: Print the summary  # noqa: run-once[task]
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'check mode - nothing applied. ' if ansible_check_mode else '' }}
+          pending before: ceph/ovs
+          {{ ansible_play_hosts | map('extract', hostvars, 'upgrade_compute_storage') | map('length') | sum
+             + ansible_play_hosts | map('extract', hostvars, 'upgrade_compute_network') | map('length') | sum }},
+          incus
+          {{ ansible_play_hosts | map('extract', hostvars, 'upgrade_compute_incus') | map('length') | sum }}.
+          cluster now: {{ (patch_compute_health | default(upgrade_compute_baseline)).ceph_status | default('?') }},
+          invariants_ok {{ (patch_compute_health | default(upgrade_compute_baseline)).invariants_ok | default('?') }}
+      run_once: true

@@ -69,13 +69,17 @@
     # own timestamped backup cannot be used - a fixed-name .bak is written
     # instead, always right before the change, so it holds the state this run
     # is about to replace.
-    - name: Back up the current file before changing it
+    - name: Back up the current file before changing it  # noqa: risky-file-permissions
       ansible.builtin.copy:
         src: "{{ kernel_cmdline_file }}"
         dest: "{{ kernel_cmdline_file }}.bak"
         remote_src: true
 
-    - name: Write the new command line
+    # Neither this copy nor the backup above sets mode, hence the
+    # risky-file-permissions skips: the boot partition is FAT, which stores no
+    # Unix permissions, so a mode would be reported as changed on every run
+    # without ever taking effect.
+    - name: Write the new command line  # noqa: risky-file-permissions
       ansible.builtin.copy:
         dest: "{{ kernel_cmdline_file }}"
         content: "{{ kernel_cmdline_new }}\n"

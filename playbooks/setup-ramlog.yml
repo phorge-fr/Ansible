@@ -92,7 +92,7 @@
             state: restarted
           register: svc_ramlog_logrotate_run
 
-        - name: logrotate.service must come back healthy
+        - name: Check that logrotate.service comes back healthy
           ansible.builtin.assert:
             that: not svc_ramlog_logrotate_run.failed
             fail_msg: logrotate.service still fails, check journalctl -u logrotate.service

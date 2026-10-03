@@ -1,5 +1,5 @@
 - name: Create directory for monitoring
-  file:
+  ansible.builtin.file:
     path: /opt/monitoring/
     state: directory
     owner: root
@@ -7,7 +7,7 @@
     mode: '0755'
 
 - name: Copy files for monitoring
-  copy:
+  ansible.builtin.copy:
     src: monitoring/
     dest: /opt/monitoring/
     owner: root

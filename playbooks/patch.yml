@@ -44,10 +44,22 @@
   # strategy is pinned rather than inherited.
   strategy: linear
   tasks:
+    # ansible_play_hosts, not ansible_play_hosts_all: a host that went
+    # unreachable during the survey surveyed nothing, so it has no plan entry
+    # and must not be looped over, counted as patchable, or used to read the
+    # answer back. _all still contains it.
+    - name: Report the hosts that dropped out before the plan  # noqa: run-once[task]
+      ansible.builtin.debug:
+        msg: >-
+          NOT PATCHED, unreachable during the survey:
+          {{ ansible_play_hosts_all | difference(ansible_play_hosts) | join(', ') }}
+      run_once: true
+      when: ansible_play_hosts_all | difference(ansible_play_hosts) | length > 0
+
     - name: Show the plan host by host  # noqa: run-once[task]
       ansible.builtin.debug:
         msg: "{{ hostvars[item].patch_plan_entry }}"
-      loop: "{{ ansible_play_hosts_all }}"
+      loop: "{{ ansible_play_hosts }}"
       run_once: true
       loop_control:
         label: "{{ item }}"
@@ -55,7 +67,7 @@
     - name: Ask once whether to apply the updates  # noqa: run-once[task]
       ansible.builtin.pause:
         prompt: |-
-          {{ ansible_play_hosts_all | length }} host(s) to patch, one at a time.
+          {{ ansible_play_hosts | length }} host(s) to patch, one at a time.
           Lines marked !! above are the ones worth reading twice.
           Apply these updates now? [yes/no]
       register: patch_decision
@@ -64,7 +76,7 @@
 
     - name: Remember the decision on every host
       ansible.builtin.set_fact:
-        patch_apply: "{{ (hostvars[ansible_play_hosts_all[0]].patch_decision.user_input | default('') | trim | lower) in ['yes', 'y', 'oui'] }}"
+        patch_apply: "{{ (hostvars[ansible_play_hosts[0]].patch_decision.user_input | default('') | trim | lower) in ['yes', 'y', 'oui'] }}"
 
     - name: Stop the run when the plan is refused
       ansible.builtin.meta: end_host

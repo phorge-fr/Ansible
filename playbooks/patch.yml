@@ -1,0 +1,265 @@
+---
+# Manual patch management, fully interactive (issue #17). The flow:
+#   1. heal any dpkg transaction a previous run left half-finished, then check
+#      every targeted host for pending updates, free space and the
+#      reboot-required flag;
+#   2. show ONE plan: the pending packages per host, which upgrades touch the
+#      kernel or the initramfs, and any host that looks unsafe to patch;
+#   3. ask ONE yes/no - "no" ends the run there without touching anything;
+#   4. then, ONE HOST AT A TIME: upgrade it, prove dpkg finished and /boot is
+#      still bootable, ask whether to reboot it, and wait for it to come back
+#      healthy before moving to the next host.
+# It sets up no automatic update mechanism of any kind - patching stays a
+# manual action run when a maintenance window is planned.
+#
+#   interactive run:  ansible-playbook playbooks/patch.yml [--limit ...]
+#   preview:          ansible-playbook playbooks/patch.yml --check (no prompts)
+#
+# Three properties make this safe to run against a quorum-based cluster, and
+# all three come from svc-rock64-01 bricking itself on 2026-10-03 (see
+# docs/patch-management.md for the post-mortem):
+#   - the upgrade runs as a transient systemd unit, not as a child of the SSH
+#     session, so losing the connection or pressing Ctrl-C can no longer stop
+#     dpkg half-way (patch role, apt-detached);
+#   - /boot is proven consistent before a reboot is even offered
+#     (the patch role, check-boot-consistency entry point);
+#   - serial: 1 with any_errors_fatal means one host is patched, rebooted and
+#     back in service before the next is touched, and the first failure stops
+#     the rollout instead of marching through the rest of the cluster.
+
+- name: Heal, then survey every targeted host
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Heal this host, then collect what the plan needs
+      ansible.builtin.include_role:
+        name: patch
+        tasks_from: survey
+
+- name: Propose the plan and wait for one decision
+  hosts: all
+  gather_facts: false
+  # run_once and the single prompt only make sense in run order, so the
+  # strategy is pinned rather than inherited.
+  strategy: linear
+  tasks:
+    - name: Show the plan host by host  # noqa: run-once[task]
+      ansible.builtin.debug:
+        msg: "{{ hostvars[item].patch_plan_entry }}"
+      loop: "{{ ansible_play_hosts_all }}"
+      run_once: true
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Ask once whether to apply the updates  # noqa: run-once[task]
+      ansible.builtin.pause:
+        prompt: |-
+          {{ ansible_play_hosts_all | length }} host(s) to patch, one at a time.
+          Lines marked !! above are the ones worth reading twice.
+          Apply these updates now? [yes/no]
+      register: patch_decision
+      run_once: true
+      when: not ansible_check_mode
+
+    - name: Remember the decision on every host
+      ansible.builtin.set_fact:
+        patch_apply: "{{ (hostvars[ansible_play_hosts_all[0]].patch_decision.user_input | default('') | trim | lower) in ['yes', 'y', 'oui'] }}"
+
+    - name: Stop the run when the plan is refused
+      ansible.builtin.meta: end_host
+      when: not ansible_check_mode and not (patch_apply | bool)
+
+# One host at a time, and the first failure stops the rollout: on a 3-node
+# etcd cluster this is what keeps a bad upgrade from taking the quorum with it.
+# Each host is upgraded, proven consistent, rebooted if asked and back in
+# service before the next one is touched.
+- name: Patch each host in turn, and prove it is still bootable
+  hosts: all
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  vars:
+    # safe = apt-get upgrade (no removals, no brand-new packages), the
+    # conservative default consistent with manual patching; pass
+    # -e patch_upgrade=dist for dist-upgrade when new dependencies are wanted.
+    patch_upgrade: safe
+  tasks:
+    - name: Upgrade the packages, detached from this SSH session
+      ansible.builtin.include_role:
+        name: patch
+        tasks_from: apt-detached
+      vars:
+        patch_detached_name: upgrade
+        # --force-confold keeps a modified config file instead of prompting:
+        # the unit has no terminal to prompt on.
+        patch_detached_command: >-
+          apt-get -y
+          -o Dpkg::Options::=--force-confdef
+          -o Dpkg::Options::=--force-confold
+          {{ 'dist-upgrade' if patch_upgrade == 'dist' else 'upgrade' }}
+        patch_detached_timeout: 5400
+      when: not ansible_check_mode and (patch_apply | default(false) | bool)
+
+    - name: Report what would be upgraded
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: would upgrade
+          {{ patch_pending.stdout_lines | length }} package(s)
+          {{ ('(of which ' ~ (patch_boot_packages | join(', ')) ~ ' rewrite /boot)') if patch_boot_packages | length > 0 else '' }}
+      when: ansible_check_mode
+
+    - name: Fail when the upgrade did not finish cleanly
+      ansible.builtin.assert:
+        that: patch_detached.rc == 0
+        fail_msg: >-
+          {{ inventory_hostname }}: apt exited {{ patch_detached.rc }}.
+          {{ 'The upgrade is STILL RUNNING under systemd and was left alone on
+          purpose - re-run this playbook to pick it up where it stopped.'
+             if patch_detached.rc == 124
+             else 'See /var/log/phorge-patch-upgrade.log on the host.' }}
+          Last output: {{ patch_detached.stdout_lines | default([]) | join(' | ') }}
+        quiet: true
+      when: not ansible_check_mode and (patch_apply | default(false) | bool)
+
+    - name: Check that dpkg finished every package
+      ansible.builtin.shell: |
+        set -o pipefail
+        dpkg-query -W -f '${Status}\t${Package}\n' 2>/dev/null \
+          | awk -F'\t' '$1 ~ /(half-configured|half-installed|unpacked|triggers-pending|triggers-awaited)/ {print $2}'
+      args:
+        executable: /bin/bash
+      register: patch_broken_post
+      changed_when: false
+      check_mode: false
+      when: not ansible_check_mode and (patch_apply | default(false) | bool)
+
+    - name: Fail when dpkg left a package unconfigured
+      ansible.builtin.assert:
+        that: patch_broken_post.stdout_lines | length == 0
+        fail_msg: >-
+          {{ inventory_hostname }}: {{ patch_broken_post.stdout_lines | length }}
+          package(s) unconfigured after the upgrade
+          ({{ patch_broken_post.stdout_lines[:8] | join(', ') }}). NOT rebooting
+          this host - it still runs the loaded kernel, which is the safe state.
+        quiet: true
+      when: not ansible_check_mode and (patch_apply | default(false) | bool)
+
+    - name: Check that /boot can still boot
+      ansible.builtin.include_role:
+        name: patch
+        tasks_from: check-boot-consistency
+      when: not ansible_check_mode and (patch_apply | default(false) | bool)
+
+    # The gate. A host whose /boot is inconsistent is still perfectly alive on
+    # its already-loaded kernel; rebooting it is what turns that into a brick,
+    # so the run stops here and the reboot is never offered.
+    - name: Refuse to reboot a host whose /boot is inconsistent
+      ansible.builtin.assert:
+        that: patch_boot_problems | length == 0
+        fail_msg: >-
+          {{ inventory_hostname }}: /boot is NOT consistent, so this host must
+          not be rebooted - it keeps running fine on the kernel already loaded.
+          Found: {{ patch_boot_problems | join(' ; ') }}.
+          Fix /boot (usually `dpkg --configure -a` then
+          `update-initramfs -c -k <version>`) and verify before any reboot.
+        quiet: true
+      when: not ansible_check_mode and (patch_apply | default(false) | bool)
+
+    - name: List what is still upgradable after the upgrade
+      ansible.builtin.shell: |
+        set -o pipefail
+        apt list --upgradable 2>/dev/null | awk '$1 ~ /\// {split($1, a, "/"); print a[1], $2}'
+      args:
+        executable: /bin/bash
+      register: patch_pending_after
+      changed_when: false
+      check_mode: false
+
+    # Held or phased updates legitimately stay upgradable after the run; they
+    # are reported as such instead of failing the play.
+    - name: Record the packages changed by this run
+      ansible.builtin.set_fact:
+        patch_applied_list: "{{ patch_pending.stdout_lines | difference(patch_pending_after.stdout_lines) }}"
+
+    - name: Check the reboot-required flag
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: patch_reboot_required
+
+    - name: Ask whether to reboot this host
+      ansible.builtin.pause:
+        prompt: |-
+          {{ inventory_hostname }} is flagged reboot-required.
+          /boot checked consistent, dpkg clean, {{ patch_applied_list | length }} package(s) upgraded.
+          Reboot it now? [yes/no]
+      register: patch_reboot_answer
+      when: not ansible_check_mode and patch_reboot_required.stat.exists
+
+    - name: Reboot this host
+      ansible.builtin.reboot:
+        reboot_timeout: 900
+      register: patch_rebooted
+      when: >-
+        not ansible_check_mode
+        and patch_reboot_required.stat.exists
+        and (patch_reboot_answer.user_input | default('') | trim | lower) in ['yes', 'y', 'oui']
+
+    # Coming back on the network is not the same as coming back healthy, and a
+    # host that boots degraded must stop the rollout before the next node is
+    # touched.
+    - name: Check that the host came back healthy
+      ansible.builtin.shell: |
+        set -uo pipefail
+        echo "state=$(systemctl is-system-running 2>/dev/null)"
+        echo "kernel=$(uname -r)"
+        systemctl list-units --state=failed --no-legend --plain 2>/dev/null | awk '{print "failed: "$1}'
+      args:
+        executable: /bin/bash
+      register: patch_post_boot
+      changed_when: false
+      check_mode: false
+      when: patch_rebooted.rebooted | default(false) | bool
+
+    - name: Check that /boot is still consistent after the reboot
+      ansible.builtin.include_role:
+        name: patch
+        tasks_from: check-boot-consistency
+      when: patch_rebooted.rebooted | default(false) | bool
+
+    - name: Fail when the host came back with failed units or a broken /boot
+      ansible.builtin.assert:
+        that:
+          - patch_boot_problems | length == 0
+          - patch_post_boot.stdout is search('state=(running|starting)')
+        fail_msg: >-
+          {{ inventory_hostname }} rebooted but did not come back clean -
+          stopping before the next host. {{ patch_post_boot.stdout_lines | join(' | ') }}
+          {{ ('/boot: ' ~ (patch_boot_problems | join(' ; '))) if patch_boot_problems | length > 0 else '' }}
+        quiet: true
+      when: patch_rebooted.rebooted | default(false) | bool
+
+    - name: Build this host's summary line
+      ansible.builtin.set_fact:
+        patch_summary_line: >-
+          {{ inventory_hostname }}: {{ patch_applied_list | length }} upgraded,
+          {{ patch_pending_after.stdout_lines | length }} still pending,
+          reboot required: {{ patch_reboot_required.stat.exists }},
+          rebooted: {{ (patch_rebooted.rebooted | default(false)) | bool }}
+          {{ ('(now on ' ~ (patch_post_boot.stdout
+                | regex_search('kernel=(\S+)', '\\1') | first) ~ ')')
+             if patch_rebooted.rebooted | default(false) | bool else '' }}
+          {{ '(check mode - nothing applied)' if ansible_check_mode else '' }}
+
+- name: Summarize the run
+  hosts: all
+  gather_facts: false
+  # run_once and the single prompt only make sense in run order, so the
+  # strategy is pinned rather than inherited.
+  strategy: linear
+  tasks:
+    - name: Print the per-host summary  # noqa: run-once[task]
+      ansible.builtin.debug:
+        msg: "{{ hostvars | dict2items | selectattr('value.patch_summary_line', 'defined') | map(attribute='value.patch_summary_line') | list }}"
+      run_once: true

@@ -1,0 +1,17 @@
+---
+# How long to keep following a detached apt/dpkg run. Giving up watching is
+# not a failure: the unit keeps going under systemd and the next run resumes
+# it where it stopped. Raise it on slow hardware - regenerating an initramfs
+# on an SD-card-backed ARM board takes minutes, not seconds.
+patch_detached_timeout: 3600
+
+# Below this much free space in /boot, a kernel upgrade is flagged in the
+# plan. Regenerating an initramfs needs room, and running out of it mid-write
+# is one way to end up with the half-written initrd that bricked
+# svc-rock64-01. Override per group when a host sizes /boot differently.
+patch_min_boot_free_mb: 80
+
+# Packages whose postinst rewrites the boot files. These are the upgrades that
+# can leave a host unbootable, so the plan names them instead of burying them
+# in a package count.
+patch_boot_packages_regex: '^(linux-image|linux-headers|linux-base|initramfs-tools|armbian-bsp|armbian-firmware|raspi-firmware|u-boot)'

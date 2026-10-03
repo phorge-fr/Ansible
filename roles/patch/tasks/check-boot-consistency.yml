@@ -1,0 +1,60 @@
+---
+# Checks that /boot can actually boot, to be run after an upgrade and BEFORE
+# offering a reboot. An interrupted kernel upgrade leaves a /boot that looks
+# populated but is unbootable, and nothing in apt or dpkg reports it: the host
+# keeps running happily on the already-loaded kernel until someone reboots it.
+#
+# svc-rock64-01 died that way on 2026-10-03. Its /boot held:
+#   Image -> vmlinuz-6.18.35-current-rockchip64   (target removed by the upgrade)
+#   initrd.img-6.18.54-current-rockchip64.new     (0 bytes, never completed)
+# and no uInitrd for the kernel that remained, so U-Boot had nothing to load.
+#
+# Deliberately bootloader-agnostic: it asserts invariants that hold on
+# Armbian/U-Boot (Image, uInitrd), on the Raspberry Pi and on GRUB alike,
+# instead of hardcoding one layout. Checks 1 and 3 are the two that would
+# each have caught svc-rock64-01 on their own.
+#
+# Output: patch_boot_problems - list of strings, empty when /boot looks sane.
+
+- name: Inspect /boot for an inconsistent kernel or initramfs
+  ansible.builtin.shell: |
+    set -uo pipefail
+    boot=/boot
+
+    # 1. a symlink whose target is gone - the bootloader follows these
+    find "$boot" -maxdepth 1 -xtype l \
+      -printf 'dangling symlink: %p -> %l\n' 2>/dev/null
+
+    # 2. a half-written file left behind by dpkg or update-initramfs
+    find "$boot" -maxdepth 1 \
+      \( -name '*.new' -o -name '*.dpkg-new' -o -name '*.dpkg-tmp' \) \
+      -printf 'leftover from an interrupted write: %p\n' 2>/dev/null
+
+    # 3. an empty kernel or initramfs artifact. Restricted to those name
+    #    patterns because Armbian legitimately keeps an empty /boot/.next.
+    find "$boot" -maxdepth 1 -type f -empty \
+      \( -name 'vmlinuz*' -o -name 'Image*' -o -name 'initrd.img*' \
+         -o -name 'uInitrd*' -o -name 'System.map*' \) \
+      -printf 'empty kernel/initramfs file: %p\n' 2>/dev/null
+
+    # 4. the newest installed kernel has no usable initramfs. Only meaningful
+    #    on hosts that ship initrds at all, hence the guard.
+    if ls "$boot"/initrd.img-* "$boot"/uInitrd-* >/dev/null 2>&1; then
+      newest=$(ls -1 /usr/lib/modules /lib/modules 2>/dev/null \
+               | grep -E '^[0-9]' | sort -V -u | tail -1)
+      if [ -n "$newest" ] \
+         && [ ! -s "$boot/initrd.img-$newest" ] \
+         && [ ! -s "$boot/uInitrd-$newest" ]; then
+        echo "no non-empty initramfs for the newest installed kernel $newest"
+      fi
+    fi
+    exit 0
+  args:
+    executable: /bin/bash
+  register: patch_boot_raw
+  changed_when: false
+  check_mode: false
+
+- name: Record the boot problems found
+  ansible.builtin.set_fact:
+    patch_boot_problems: "{{ patch_boot_raw.stdout_lines | select('match', '.') | list }}"

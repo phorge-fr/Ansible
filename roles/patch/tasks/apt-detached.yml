@@ -1,0 +1,118 @@
+---
+# Runs one apt/dpkg command as a transient systemd unit instead of as a child
+# of the SSH session, then follows it from the outside.
+#
+# This is the mitigation for what bricked svc-rock64-01 on 2026-10-03: the
+# upgrade was a child of the Ansible SSH session, the session went away while
+# dpkg was configuring linux-image, and dpkg never got to finish. It left 50
+# packages unpacked-but-not-configured, a 0-byte initrd.img-*.new and a
+# /boot/Image symlink pointing at the vmlinuz the upgrade had already removed,
+# so U-Boot had no kernel to load and the node never came back.
+#
+# Owned by PID 1, the unit survives a dropped connection, an Ansible timeout
+# and a Ctrl-C: dpkg always reaches a consistent state on its own. The wait
+# below is the only thing that dies with the connection, and an interrupted
+# run is resumed - not restarted - by the next one, which is why the unit is
+# checked for before being started.
+#
+# Inputs:  patch_detached_name     short unit/log suffix, e.g. "upgrade"
+#          patch_detached_command  the command line to run
+#          patch_detached_timeout  seconds to follow it (default 3600)
+# Nothing here runs under --check: the shell task is skipped like any other,
+# so a preview can never start a real upgrade. Callers guard the include with
+# `not ansible_check_mode` as well.
+#
+# Output:  patch_detached.rc       the command's own exit status
+#          patch_detached.stdout   "exit=<rc>" then the last lines of its log
+
+# Asked before staging: overwriting the script while bash is still reading it
+# is how a resumed run could corrupt its own execution. An in-progress unit is
+# left strictly alone - script and all.
+# No state: given, so the module only reads the unit. It reports a transient
+# unit that does not exist yet as "inactive" rather than failing, which is the
+# normal case on a first run.
+- name: "Check whether a run is already in progress: {{ patch_detached_name }}"
+  ansible.builtin.systemd_service:
+    name: "phorge-patch-{{ patch_detached_name }}"
+  register: patch_detached_active
+  changed_when: false
+  check_mode: false
+
+- name: "Stage the command as a script: {{ patch_detached_name }}"
+  ansible.builtin.copy:
+    dest: "/usr/local/sbin/phorge-patch-{{ patch_detached_name }}"
+    owner: root
+    group: root
+    mode: "0750"
+    # The command is staged as a file rather than passed inline so that
+    # nothing has to survive two levels of shell quoting, and so that what
+    # actually ran stays readable on the host afterwards.
+    content: |
+      #!/bin/bash
+      # Managed by Ansible (patch role, apt-detached), overwritten.
+      export DEBIAN_FRONTEND=noninteractive
+      {{ patch_detached_command }} > /var/log/phorge-patch-{{ patch_detached_name }}.log 2>&1
+      echo $? > /var/log/phorge-patch-{{ patch_detached_name }}.status
+  when: patch_detached_active.status.ActiveState not in ['active', 'activating']
+
+- name: "Run it detached, and follow it: {{ patch_detached_name }}"
+  ansible.builtin.shell: |
+    set -uo pipefail
+    unit="phorge-patch-{{ patch_detached_name }}"
+    log="/var/log/${unit}.log"
+    status="/var/log/${unit}.status"
+
+    # Not is-active --quiet: a unit whose main process is still running reports
+    # "activating" during its start-up phase, which that test rejects. Getting
+    # this wrong means trying to launch a second systemd-run over a live one.
+    state=$(systemctl is-active "$unit" 2>/dev/null || true)
+    if [ "$state" = "active" ] || [ "$state" = "activating" ]; then
+      echo "RESUMED: a run started by an earlier play is still in progress" >&2
+    else
+      rm -f "$status"
+      systemctl reset-failed "$unit" 2>/dev/null || true
+      # A systemd-run that fails (missing script, bad property) must fail loudly
+      # here: without this the wait below would poll for a status file that is
+      # never going to appear.
+      # Default Type=simple on purpose. Type=oneshot would make systemd-run
+      # block until the whole upgrade finished - the bounded wait below could
+      # then never apply - and would report the unit as "activating" rather
+      # than "active" for its entire run, breaking the resume check above.
+      if ! systemd-run --no-block --unit="$unit" \
+           "/usr/local/sbin/${unit}" >/dev/null 2>&1; then
+        echo "FAILED to start $unit - nothing was launched" >&2
+        exit 125
+      fi
+    fi
+
+    # The script writes the status file as its very last action, so the file
+    # appearing is the completion marker - more reliable than is-active, which
+    # is racy right after systemd-run returns.
+    waited=0
+    while [ ! -f "$status" ] && [ "$waited" -lt {{ patch_detached_timeout | default(3600) }} ]; do
+      # The wrapper script always exits 0 - its last action is recording the
+      # status of apt itself - so a unit in failed state never ran at all and
+      # will never write the status file. Waiting the full timeout on it is
+      # pointless.
+      if systemctl is-failed --quiet "$unit"; then
+        echo "unit $unit failed to run:" >&2
+        systemctl status "$unit" --no-pager -l 2>&1 | tail -10 >&2
+        exit 125
+      fi
+      sleep 5
+      waited=$((waited + 5))
+    done
+
+    if [ ! -f "$status" ]; then
+      echo "STILL RUNNING after ${waited}s - left alone on purpose; the next run resumes it" >&2
+      exit 124
+    fi
+
+    echo "exit=$(cat "$status")"
+    tail -20 "$log" 2>/dev/null
+    exit "$(cat "$status")"
+  args:
+    executable: /bin/bash
+  register: patch_detached
+  changed_when: false
+  failed_when: false

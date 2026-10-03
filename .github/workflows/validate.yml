@@ -16,11 +16,14 @@ permissions:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    # Pinned rather than ubuntu-latest: that label migrates to Ubuntu 26 from
+    # 2026-10-19, and a validation gate should not change under the repository
+    # on a date nobody chose. Bumped deliberately.
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 

@@ -43,8 +43,23 @@ loki.write "core" {
 // Host metrics
 
 // The nvme collector fails on this kernel (unreadable /sys/class/nvme/*/nuse) and logs an error at every scrape.
+//
+// The systemd collector is what lets NodeSystemdServiceFailed and
+// NodeSystemdServiceCrashlooping (kube-prometheus-stack, on core) fire for this
+// node at all: with no node_systemd_* series for cluster="stor", a failed unit
+// is invisible to monitoring. Alloy runs as root here (alloy_systemd_override in
+// group_vars/storage.yml), so it can reach the system bus.
+//
+// unit_include keeps the series count to the units whose failure actually
+// matters on a storage node - the NFS stack, the array monitor, Docker (rustfs),
+// Alloy itself, SSH and time sync - instead of every unit on the host.
 prometheus.exporter.unix "node" {
   disable_collectors = ["nvme"]
+  enable_collectors  = ["systemd"]
+
+  systemd {
+    unit_include = "^(alloy|docker|mdmonitor|nfs-server|nfs-mountd|nfs-idmapd|nfsdcld|rpcbind|rpc-statd|ssh|systemd-timesyncd)\\.service$"
+  }
 }
 
 discovery.relabel "node" {

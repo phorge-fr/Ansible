@@ -136,6 +136,13 @@ and the summary readable (the default JSON-ish callback flattens them).
 - If apt is reported as `STILL RUNNING` (exit 124), it was deliberately left
   alone: the unit is still working under systemd. Re-run the playbook to pick
   it up.
+- On the `compute` nodes the plan flags the Incus, Ceph and OVN packages as
+  `!! owned by playbooks/upgrade-compute.yml, do not upgrade here`. They are
+  not held back - the choice stays yours - but upgrading them through this
+  playbook's shape is actively wrong, not merely suboptimal: one node at a
+  time with a prompt in between is the worst possible order for Incus, which
+  blocks the cluster for as long as its members disagree on the version. Use
+  `--limit 'all:!compute'` here and `upgrade-compute.yml` for those.
 - Recovering a host that is already unbootable is not something this playbook
   can do - it needs the boot media and a chroot. The `svc-rock64-01` procedure
   was: `dpkg --configure -a`, then `update-initramfs -c -k <version>`, then fix

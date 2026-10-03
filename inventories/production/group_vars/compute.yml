@@ -46,6 +46,22 @@ firewall_allowed_ports:
   # firewall role's unconditional "loopback" allow. Ceph's own Prometheus endpoint (9283) is scraped the same way,
   # over a literal 127.0.0.1 in alloy-compute.alloy.
 
+# Which pending packages playbooks/upgrade-compute.yml treats as cluster
+# components. Split by rolling semantics, not by vendor: storage and network
+# tolerate mixed versions across members and are rolled one node at a time,
+# while Incus blocks the cluster until every member agrees on the version and
+# has to be swept across all of them at once.
+upgrade_compute_regex_storage: '^(ceph|lib(ceph|rados|rbd)|python3-(ceph|rados|rbd))'
+upgrade_compute_regex_network: '^(ovn|openvswitch|libopenvswitch)'
+upgrade_compute_regex_incus: '^incus'
+
+# patch.yml flags these instead of upgrading them in place. Its shape - one
+# node at a time, with a prompt between nodes - is the worst possible one for
+# Incus, which blocks the cluster for as long as the members disagree on the
+# version. playbooks/upgrade-compute.yml sweeps them correctly.
+patch_handover_regex: '^(ceph|lib(ceph|rados|rbd)|python3-(ceph|rados|rbd)|ovn|openvswitch|libopenvswitch|incus)'
+patch_handover_playbook: playbooks/upgrade-compute.yml
+
 # Incus (see docs/incus-installation.md for the deployment procedure)
 incus_name: compute
 incus_release: stable  # Zabbly repo: needed for incus-ui-canonical, missing from Debian's own repo

@@ -1,0 +1,107 @@
+---
+# Reads the health of the three things a compute node upgrade can break, and
+# sets patch_compute_health. Used once before the run as a baseline and again
+# after every node.
+#
+# Deliberately NOT "ceph health == HEALTH_OK": this cluster sits on
+# HEALTH_WARN for a BlueStore slow-op alert on osd.1, and gating on OK would
+# refuse to run at all. What matters is the invariants - every mon in quorum,
+# every OSD up and in, every PG active+clean, every Incus member operational,
+# a leader on both OVN raft rings - plus the health string itself, so the
+# caller can compare it against the baseline and notice a change rather than
+# an absolute value.
+#
+# Output: patch_compute_health, a dict with
+#   ceph_status, mons_total, mons_quorum, osds_total, osds_up, osds_in,
+#   pgs_total, pgs_clean, incus_members, incus_online, ovn_nb_leader,
+#   ovn_sb_leader, invariants_ok
+
+- name: Read the cluster health
+  ansible.builtin.shell: |
+    set -uo pipefail
+    python3 - <<'PY'
+    import json, subprocess
+
+    def run(cmd):
+        try:
+            p = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60)
+            return p.stdout if p.returncode == 0 else ""
+        except Exception:
+            return ""
+
+    out = {}
+
+    # --- Ceph ---------------------------------------------------------------
+    raw = run("ceph status --format json")
+    if raw:
+        c = json.loads(raw)
+        out["ceph_status"] = c["health"]["status"]
+        out["mons_total"] = c["monmap"]["num_mons"]
+        out["mons_quorum"] = len(c.get("quorum", []))
+        o = c["osdmap"]
+        out["osds_total"] = o.get("num_osds", 0)
+        out["osds_up"] = o.get("num_up_osds", 0)
+        out["osds_in"] = o.get("num_in_osds", 0)
+        pg = c["pgmap"]
+        out["pgs_total"] = pg.get("num_pgs", 0)
+        out["pgs_clean"] = sum(s.get("count", 0) for s in pg.get("pgs_by_state", [])
+                               if s.get("state_name") == "active+clean")
+    # The flags are NOT in ceph status: its osdmap carries only the counters
+    # (epoch, num_osds, num_up_osds, num_in_osds, num_remapped_pgs). Reading
+    # them there returns None and silently reports every flag as unset, which
+    # is how this check was wrong on the first attempt. ceph osd dump is the
+    # authoritative source.
+    raw = run("ceph osd dump --format json")
+    if raw:
+        out["ceph_noout"] = "noout" in (json.loads(raw).get("flags_set") or [])
+
+    # --- Incus --------------------------------------------------------------
+    raw = run("incus cluster list --format json")
+    if raw:
+        members = json.loads(raw)
+        out["incus_members"] = len(members)
+        out["incus_online"] = sum(1 for m in members if m.get("status") == "Online")
+
+    # --- OVN raft -----------------------------------------------------------
+    for sig, ctl, db in (("nb", "ovnnb_db", "OVN_Northbound"),
+                         ("sb", "ovnsb_db", "OVN_Southbound")):
+        raw = run(f"ovn-appctl -t /var/run/ovn/{ctl}.ctl cluster/status {db}")
+        leader = ""
+        for line in raw.splitlines():
+            if line.startswith("Leader:"):
+                leader = line.split(":", 1)[1].strip()
+        out[f"ovn_{sig}_leader"] = leader
+
+    out["invariants_ok"] = all([
+        out.get("mons_total", 0) > 0,
+        out.get("mons_quorum") == out.get("mons_total"),
+        out.get("osds_total", 0) > 0,
+        out.get("osds_up") == out.get("osds_total"),
+        out.get("osds_in") == out.get("osds_total"),
+        out.get("pgs_total", 0) > 0,
+        out.get("pgs_clean") == out.get("pgs_total"),
+        out.get("incus_members", 0) > 0,
+        out.get("incus_online") == out.get("incus_members"),
+        out.get("ovn_nb_leader", "") not in ("", "unknown"),
+        out.get("ovn_sb_leader", "") not in ("", "unknown"),
+    ])
+    print(json.dumps(out))
+    PY
+  args:
+    executable: /bin/bash
+  register: compute_health_raw
+  changed_when: false
+  check_mode: false
+  # One read by default, for a baseline. The caller raises the retries to turn
+  # the same read into a wait - after upgrading a node, the invariants need
+  # time to come back (an OSD restarting, PGs going from degraded to clean).
+  until: (compute_health_raw.stdout | default('{}') | from_json).invariants_ok | default(false)
+  retries: "{{ compute_health_retries | default(1) | int }}"
+  delay: "{{ compute_health_delay | default(15) | int }}"
+  failed_when: false
+
+# Not failed_when on the read itself: a caller doing a baseline wants the
+# numbers even when the invariants are broken, so it can say which one.
+- name: Record the cluster health
+  ansible.builtin.set_fact:
+    patch_compute_health: "{{ compute_health_raw.stdout | default('{}') | from_json }}"

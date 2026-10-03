@@ -82,6 +82,7 @@ If SSH is not reachable from any address of `firewall_ssh_sources`, only the con
 - The check only covers the address Ansible connects from. Every other place you may connect from must be listed in `firewall_ssh_sources`.
 - `--check` needs `python3-apt` on the target (any earlier real run of an apt task installs it).
 - The `input` chain does not see traffic that Cilium redirects in eBPF. Check the audit counters on the k0s nodes before enforcing.
+- The `input` chain matches the destination *after* nat. A `DNAT` or `REDIRECT` rule owned by another component rewrites it before the hook runs, so a rule written for the port clients actually target can miss entirely: k0s control plane load balancing redirects the cluster VIP's 6443 to the local 6444, which is why the k0s groups allow both (issue #28).
 
 ## Dependencies
 

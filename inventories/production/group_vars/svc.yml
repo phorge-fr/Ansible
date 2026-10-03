@@ -9,6 +9,16 @@ firewall_allowed_ports:
       - &nodes 10.3.0.1-10.3.0.3
       - &pods 10.244.0.0/16
     comment: Kubernetes API from the management network, the nodes and the pods
+  # k0s control plane load balancing redirects the VIP 10.3.0.4:6443 to this port
+  # in its own nat table. nat runs before the input hook, so the rule above sees
+  # <nodeIP>:6444 and never matches - the VIP times out without this (issue #28).
+  - proto: tcp
+    ports: [6444]
+    sources:
+      - "{{ management_network }}"
+      - *nodes
+      - *pods
+    comment: Kubernetes API reached through the CPLB VIP redirect
   - proto: tcp
     ports: [9443]
     sources:

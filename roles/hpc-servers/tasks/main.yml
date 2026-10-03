@@ -1,4 +1,0 @@
----
-
- - import_tasks: install-monitoring.yml
- - import_tasks: install-smolinfer.yml

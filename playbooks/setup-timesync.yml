@@ -21,13 +21,13 @@
           line: "FallbackNTP={{ time_ntp_fallback_servers | join(' ') }}"
       register: timesync_config
 
-    - name: Restart systemd-timesyncd when its configuration changed
+    - name: Restart systemd-timesyncd when its configuration changed  # noqa: no-handler
       ansible.builtin.systemd:
         name: systemd-timesyncd
         state: restarted
       when: timesync_config is changed
 
-    - name: systemd-timesyncd is enabled and running
+    - name: Make sure systemd-timesyncd is enabled and running
       ansible.builtin.systemd:
         name: systemd-timesyncd
         enabled: true
@@ -65,6 +65,7 @@
         # supposed to be measured against the threshold - report it as "none".
         - name: Measure the current offset in milliseconds
           ansible.builtin.shell: |
+            set -o pipefail
             out=$(timedatectl timesync-status --no-pager 2>/dev/null | awk '/^ *Offset:/ {print $2}')
             case "$out" in
               ""|"n/a") echo none ;;
@@ -83,6 +84,7 @@
 
         - name: Re-measure the offset after the forced resync
           ansible.builtin.shell: |
+            set -o pipefail
             sleep 5
             out=$(timedatectl timesync-status --no-pager 2>/dev/null | awk '/^ *Offset:/ {print $2}')
             case "$out" in

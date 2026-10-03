@@ -1,0 +1,6 @@
+---
+- name: Install the monitoring stack
+  ansible.builtin.import_tasks: install-monitoring.yml
+
+- name: Install the smolinfer inference stack
+  ansible.builtin.import_tasks: install-smolinfer.yml

@@ -55,6 +55,19 @@ upgrade_compute_regex_storage: '^(ceph|lib(ceph|rados|rbd)|python3-(ceph|rados|r
 upgrade_compute_regex_network: '^(ovn|openvswitch|libopenvswitch)'
 upgrade_compute_regex_incus: '^incus'
 
+# playbooks/setup-network-mtu.yml. comp-ew carries the OVN Geneve tunnels
+# (ovn_ip_address is this interface), and Geneve costs 58 bytes: at the default
+# 1500 the overlay is capped at 1442, which is what broke PMTUD for instances.
+# 8152 matches the RouterOS VLAN and was measured end to end through the switch.
+# comp-ns is deliberately absent - it only ever carries decapsulated traffic.
+network_mtu:
+  enp0s31f6: 8152
+network_mtu_gateway: 10.10.0.254
+
+# The MTU instances get. 1500 rather than the 8094 the underlay would now allow:
+# a guest at 1500 needs no PMTUD towards the internet, which is the whole point.
+incus_ovn_instance_mtu: 1500
+
 # patch.yml flags these instead of upgrading them in place. Its shape - one
 # node at a time, with a prompt between nodes - is the worst possible one for
 # Incus, which blocks the cluster for as long as the members disagree on the

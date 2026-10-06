@@ -1,0 +1,219 @@
+---
+# Sets an explicit MTU on the interfaces that need one, and nowhere else
+# (issue #39).
+#
+#   preview:  ansible-playbook playbooks/setup-network-mtu.yml --check
+#   run:      ansible-playbook playbooks/setup-network-mtu.yml
+#
+# WHY, and why only comp-ew:
+#
+# The RouterOS VLAN interfaces are all at MTU 8152 while every host sits at the
+# Linux default 1500. On most VLANs that mismatch is latent - the router only
+# emits a frame larger than 1500 if it receives one, and no host originates
+# one - so they are left alone.
+#
+# comp-ew is different: it carries the OVN Geneve tunnels between the compute
+# nodes (ovn_ip_address is the enp0s31f6 address). Geneve costs 58 bytes, so a
+# 1500 underlay caps instances at 1442, which is what Incus had computed. An
+# instance at 1442 behind a 1500 path depends entirely on PMTUD, and PMTUD is
+# broken here: the router has no MSS clamping and fasttracks established flows,
+# which stops ICMP "fragmentation needed" being matched as related. That is the
+# blackhole reported in the issue - apt stalling on anything past the first
+# cached file.
+#
+# Raising comp-ew to 8152 lets the overlay be a clean 1500 and lets Ceph
+# replication use jumbo frames on the same wire.
+#
+# MEASURED, not assumed: frames up to 8152 bytes pass from comp-opti-02 through
+# the CSS326 switch to the router. SNMP reports ifMtu 1500 on every switch port,
+# but that is the IF-MIB default - a layer 2 switch does not enforce a layer 3
+# MTU, and the Marvell chip forwards jumbo natively.
+#
+# Changing the MTU bounces the link, which Ceph notices: a test on one node
+# produced a 4-second OSD heartbeat warning that cleared in 80 seconds, with
+# every PG staying active+clean. Hence serial: 1 and a health gate between
+# nodes rather than all three at once.
+
+- name: Network - Set the explicit interface MTUs
+  hosts: all
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - name: Skip hosts with nothing to set
+      ansible.builtin.meta: end_host
+      when: network_mtu | default({}) | length == 0
+
+    - name: Check the cluster is healthy before touching this node
+      ansible.builtin.include_tasks: tasks/check-compute-health.yml
+      when: not ansible_check_mode and inventory_hostname in groups['compute'] | default([])
+
+    - name: Refuse to start on a cluster that is not whole
+      ansible.builtin.assert:
+        that: patch_compute_health.invariants_ok | default(false)
+        fail_msg: >-
+          {{ inventory_hostname }}: the compute cluster is not whole, so this is
+          not the moment to bounce a link. ceph
+          {{ patch_compute_health.ceph_status | default('?') }}, PGs
+          {{ patch_compute_health.pgs_clean | default('?') }}/{{ patch_compute_health.pgs_total | default('?') }}
+          active+clean.
+        quiet: true
+      when: not ansible_check_mode and inventory_hostname in groups['compute'] | default([])
+
+    # Persisted in the ifupdown stanza rather than a systemd .link file: this
+    # file is where the address, gateway and resolver of the same interface are
+    # already declared, so the MTU belongs beside them where anyone looking
+    # will find it. Backed up, then read back.
+    - name: Declare the MTU in the interface stanza
+      ansible.builtin.lineinfile:
+        path: /etc/network/interfaces
+        insertafter: "^iface {{ item.key }} inet "
+        regexp: "^\\s*mtu\\s+[0-9]+\\s*$"
+        line: "mtu {{ item.value }}"
+        backup: true
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ network_mtu | dict2items }}"
+      loop_control:
+        label: "{{ item.key }} -> {{ item.value }}"
+      register: network_mtu_written
+
+    - name: Apply the MTU without waiting for a reboot
+      ansible.builtin.command: "ip link set dev {{ item.key }} mtu {{ item.value }}"
+      loop: "{{ network_mtu | dict2items }}"
+      loop_control:
+        label: "{{ item.key }} -> {{ item.value }}"
+      changed_when: true
+      when: not ansible_check_mode
+
+    # The link bounce drops the neighbour entries, and the first probes after it
+    # fail while ARP resolves again - which is exactly what made the first
+    # measurement of this look like small frames were being dropped.
+    - name: Wait for the interface to carry traffic again
+      ansible.builtin.command: "ping -c1 -W2 {{ network_mtu_gateway }}"
+      register: network_mtu_ping
+      until: network_mtu_ping.rc == 0
+      retries: 15
+      delay: 4
+      changed_when: false
+      when: not ansible_check_mode and network_mtu_gateway | default('') | length > 0
+
+    - name: Read back what the interfaces actually carry
+      ansible.builtin.shell: |
+        set -o pipefail
+        for i in {{ network_mtu.keys() | join(' ') }}; do
+          printf '%s=%s\n' "$i" "$(cat /sys/class/net/$i/mtu 2>/dev/null || echo missing)"
+        done
+      args:
+        executable: /bin/bash
+      register: network_mtu_readback
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Fail when an interface did not take the MTU
+      ansible.builtin.assert:
+        that: network_mtu_readback.stdout is search(item.key ~ '=' ~ item.value ~ '$', multiline=True)
+        fail_msg: >-
+          {{ inventory_hostname }}: {{ item.key }} did not take MTU {{ item.value }}.
+          Read back: {{ network_mtu_readback.stdout_lines | default([]) | join(', ') }}
+        quiet: true
+      loop: "{{ network_mtu | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      when: not ansible_check_mode
+
+    - name: Wait for the cluster to be whole again before the next node
+      ansible.builtin.include_tasks: tasks/check-compute-health.yml
+      vars:
+        compute_health_retries: 40
+        compute_health_delay: 15
+      when: not ansible_check_mode and inventory_hostname in groups['compute'] | default([])
+
+    - name: Fail when the cluster did not settle
+      ansible.builtin.assert:
+        that: patch_compute_health.invariants_ok | default(false)
+        fail_msg: >-
+          {{ inventory_hostname }}: the MTU is set but the cluster did not come
+          back whole within 10 minutes - stopping before the next node.
+          ceph {{ patch_compute_health.ceph_status | default('?') }}, PGs
+          {{ patch_compute_health.pgs_clean | default('?') }}/{{ patch_compute_health.pgs_total | default('?') }}.
+        quiet: true
+      when: not ansible_check_mode and inventory_hostname in groups['compute'] | default([])
+
+# Raising the underlay changes nothing on its own: Incus pinned bridge.mtu to
+# 1442 on the OVN networks when it created them, computed from the 1500 it saw
+# then. Run once, after every node carries the larger MTU - the overlay can only
+# grow once the underlay has.
+- name: Network - Let the OVN instances use a full 1500
+  hosts: compute
+  become: true
+  gather_facts: false
+  tasks:
+    # Found the hard way: run with --limit on a single node, this play still
+    # fired and raised the overlay while the other two were still on a 1500
+    # underlay. Nothing broke, because running instances keep the MTU they were
+    # handed, but an instance renewing its lease would have started sending
+    # 1500 that no longer fitted in a Geneve tunnel between those nodes.
+    - name: Refuse to raise the overlay unless every node is in this run  # noqa: run-once[task]
+      ansible.builtin.assert:
+        that: (groups['compute'] | difference(ansible_play_hosts)) | length == 0
+        fail_msg: >-
+          The overlay can only grow once every node carries the larger underlay,
+          and this run is missing
+          {{ groups['compute'] | difference(ansible_play_hosts) | join(', ') }}.
+          Re-run without --limit, or limit to the whole compute group.
+        quiet: true
+      run_once: true
+
+    - name: List the OVN networks  # noqa: run-once[task]
+      ansible.builtin.shell: |
+        set -o pipefail
+        incus network list -f csv | awk -F, '$2 == "ovn" {print $1}'
+      args:
+        executable: /bin/bash
+      register: network_mtu_ovn
+      changed_when: false
+      check_mode: false
+      run_once: true
+
+    - name: Read the MTU each one currently gives instances  # noqa: run-once[task]
+      ansible.builtin.command: "incus network get {{ item }} bridge.mtu"
+      loop: "{{ network_mtu_ovn.stdout_lines | default([]) }}"
+      register: network_mtu_ovn_before
+      changed_when: false
+      check_mode: false
+      run_once: true
+
+    - name: Raise it to the instance MTU  # noqa: run-once[task]
+      ansible.builtin.command: "incus network set {{ item.item }} bridge.mtu {{ incus_ovn_instance_mtu }}"
+      loop: "{{ network_mtu_ovn_before.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item }}: {{ item.stdout | default('?') }} -> {{ incus_ovn_instance_mtu }}"
+      when:
+        - not ansible_check_mode
+        - (item.stdout | default('')) | trim != (incus_ovn_instance_mtu | string)
+      changed_when: true
+      run_once: true
+
+    # Running instances keep the MTU they were handed until they renew their
+    # lease or restart, so this reports rather than restarts anything.
+    - name: Report which instances still need a restart to pick it up  # noqa: run-once[task]
+      ansible.builtin.shell: |
+        set -o pipefail
+        incus list -f csv -c ns 2>/dev/null | awk -F, '$2 == "RUNNING" {print $1}'
+      args:
+        executable: /bin/bash
+      register: network_mtu_instances
+      changed_when: false
+      check_mode: false
+      run_once: true
+
+    - name: Instances to restart  # noqa: run-once[task]
+      ansible.builtin.debug:
+        msg: >-
+          The OVN networks now hand out {{ incus_ovn_instance_mtu }}, but running
+          instances keep what they were given until they renew DHCP or restart:
+          {{ network_mtu_instances.stdout_lines | default([]) | join(', ') | default('none running', true) }}
+      run_once: true

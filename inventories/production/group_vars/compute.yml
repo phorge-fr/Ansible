@@ -190,13 +190,16 @@ incus_cloudflare_api_token: !vault |
 #   playbooks/tasks/trust-core-ca.yml (Incus's OpenFGA client has no CA option)
 # - its Ingress no longer has Traefik BasicAuth (FrontPlane, removed 2026-09-23:
 #   Basic and Bearer share the Authorization header, so a client can't send both)
-# - a dedicated store is created if none has that name (FrontPlane also has an
-#   unrelated "test-store", left alone)
-# - "iaas" is the store Hangar's Crossplane provider-openfga manages
-#   (overlays/control/resources/openfga/store.yml) - this playbook only looks
-#   up its id by name, it never creates or owns the store itself anymore
+# - the store id is given here rather than discovered. The store is the one
+#   Hangar's Crossplane provider-openfga manages
+#   (overlays/control/resources/openfga/store.yml): Ansible neither creates it
+#   nor looks it up, it only points Incus at it. Resolving it by name was also
+#   unsound, since OpenFGA does not enforce unique store names and this
+#   deployment already carries two called "test-store".
+# - changing this id repoints the authorizer on the next run of
+#   configure-compute.yml, so it is a deliberate edit, not a side effect.
 incus_openfga_url: https://openfga.core.phorge
-incus_openfga_store_name: iaas
+incus_openfga_store_id: "01M46QWWZKD17137T1AB0V6V0Q"
 # incus_openfga_admins is gone: the admin tuples on server:incus are declared
 # as Crossplane RelationshipTuple resources in the store, not written from here
 # (issue #41). Without at least one such tuple nobody but a TLS client

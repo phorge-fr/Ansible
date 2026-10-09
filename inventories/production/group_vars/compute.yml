@@ -192,13 +192,16 @@ incus_cloudflare_api_token: !vault |
 #   Basic and Bearer share the Authorization header, so a client can't send both)
 # - a dedicated store is created if none has that name (FrontPlane also has an
 #   unrelated "test-store", left alone)
+# - "iaas" is the store Hangar's Crossplane provider-openfga manages
+#   (overlays/control/resources/openfga/store.yml) - this playbook only looks
+#   up its id by name, it never creates or owns the store itself anymore
 incus_openfga_url: https://openfga.core.phorge
-incus_openfga_store_name: Incus
-# Users granted `admin` on server:incus. Without at least one, nobody but a
-# TLS client certificate / the local root socket can do anything once the
-# authorizer is on. Entries are the OIDC claim value (oidc.claim: email).
-incus_openfga_admins:
-  - contact@phorge.fr
+incus_openfga_store_name: iaas
+# incus_openfga_admins is gone: the admin tuples on server:incus are declared
+# as Crossplane RelationshipTuple resources in the store, not written from here
+# (issue #41). Without at least one such tuple nobody but a TLS client
+# certificate or the local root socket can do anything once the authorizer is
+# on, so check that side before assuming a lockout is an Incus problem.
 #
 # incus_openfga_api_token: the real preshared token from FrontPlane's
 # overlays/core/apps/openfga/secrets.yml (`keys` field) - this is a single

@@ -142,54 +142,15 @@
       run_once: true
 
     # ---- OpenFGA authorization -------------------------------------------
-    # Store: created here (not in setup-compute.yml) because it has to exist
-    # before the three authorization.openfga.* keys can be set, and those
-    # have to be set together, in a single `incus config set` - Incus loads
-    # the authorizer as soon as it has a complete configuration.
-    - name: List the OpenFGA stores  # noqa: run-once[task]
-      ansible.builtin.uri:
-        url: "{{ incus_openfga_url }}/stores"
-        headers:
-          Authorization: "Bearer {{ incus_openfga_api_token }}"
-        ca_path: "{{ playbook_dir }}/files/alloy-ca.crt"
-        return_content: true
-      delegate_to: 127.0.0.1
-      become: false
-      run_once: true
-      register: compute_openfga_stores
-
-    # OpenFGA doesn't enforce unique store names, so only create when the
-    # name is absent - never blindly.
-    - name: Create the dedicated OpenFGA store when there is none  # noqa: run-once[task]
-      ansible.builtin.uri:
-        url: "{{ incus_openfga_url }}/stores"
-        method: POST
-        headers:
-          Authorization: "Bearer {{ incus_openfga_api_token }}"
-        ca_path: "{{ playbook_dir }}/files/alloy-ca.crt"
-        body_format: json
-        body:
-          name: "{{ incus_openfga_store_name }}"
-        status_code: 201
-        return_content: true
-      delegate_to: 127.0.0.1
-      become: false
-      run_once: true
-      when: incus_openfga_store_name not in (compute_openfga_stores.json.stores | map(attribute='name') | list)
-      changed_when: true
-      register: compute_openfga_store_created
-
-    # run_once + set_fact applies the fact to every host in the play.
-    - name: Record the OpenFGA store id  # noqa: run-once[task]
-      ansible.builtin.set_fact:
-        incus_openfga_store_id: >-
-          {{ compute_openfga_store_created.json.id
-             if compute_openfga_store_created is not skipped
-             else (compute_openfga_stores.json.stores
-                   | selectattr('name', 'equalto', incus_openfga_store_name)
-                   | map(attribute='id') | first) }}
-      run_once: true
-
+    # The store id is given, not discovered: the store is owned by Crossplane's
+    # provider-openfga, so this playbook neither creates it nor looks it up.
+    # Looking it up by name was also unsound - OpenFGA does not enforce unique
+    # store names, and this deployment already carries two called "test-store",
+    # so a name lookup can resolve to the wrong one.
+    #
+    # The three authorization.openfga.* keys have to be set together in a single
+    # `incus config set`: Incus loads the authorizer as soon as it has a
+    # complete configuration.
     - name: Read the OpenFGA store id currently set on Incus  # noqa: run-once[task]
       ansible.builtin.command: incus config get authorization.openfga.store.id
       register: compute_incus_openfga_current

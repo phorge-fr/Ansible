@@ -207,55 +207,11 @@
       no_log: true
       run_once: true
 
-    # Incus writes its authorization model into the store when it loads the
-    # authorizer - reading a tuple of type server before that returns a 400
-    # (unknown type), hence the retries.
-    - name: Check which admin grants already exist  # noqa: run-once[task]
-      ansible.builtin.uri:
-        url: "{{ incus_openfga_url }}/stores/{{ incus_openfga_store_id }}/read"
-        method: POST
-        headers:
-          Authorization: "Bearer {{ incus_openfga_api_token }}"
-        ca_path: "{{ playbook_dir }}/files/alloy-ca.crt"
-        body_format: json
-        body:
-          tuple_key:
-            user: "user:{{ item }}"
-            relation: admin
-            object: server:incus
-        status_code: [200, 400]
-        return_content: true
-      loop: "{{ incus_openfga_admins }}"
-      delegate_to: 127.0.0.1
-      become: false
-      run_once: true
-      register: compute_openfga_admin_grants
-      until: compute_openfga_admin_grants.status == 200
-      retries: 12
-      delay: 5
-
-    - name: Grant admin on the Incus server to the configured users  # noqa: run-once[task]
-      ansible.builtin.uri:
-        url: "{{ incus_openfga_url }}/stores/{{ incus_openfga_store_id }}/write"
-        method: POST
-        headers:
-          Authorization: "Bearer {{ incus_openfga_api_token }}"
-        ca_path: "{{ playbook_dir }}/files/alloy-ca.crt"
-        body_format: json
-        body:
-          writes:
-            tuple_keys:
-              - user: "user:{{ item.item }}"
-                relation: admin
-                object: server:incus
-      loop: "{{ compute_openfga_admin_grants.results }}"
-      loop_control:
-        label: "{{ item.item }}"
-      delegate_to: 127.0.0.1
-      become: false
-      run_once: true
-      when: item.json.tuples | default([]) | length == 0
-      changed_when: true
+    # The admin tuples on server:incus are NOT written here. The store is the
+    # one Crossplane's provider-openfga manages, so a tuple written from here
+    # and a RelationshipTuple declared there would both claim ownership of
+    # `user:... -> admin -> server:incus`. Ansible points Incus at the store;
+    # what lives inside it is GitOps-managed (issue #41).
 
     # ---- Ceph metrics ----------------------------------------------------
     # The mgr Prometheus module only serves metrics from the ACTIVE mgr (a standby answers an empty 200), which is

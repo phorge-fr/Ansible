@@ -38,6 +38,10 @@
       when:
         - alloy_prometheus_basic_auth_password is defined
         - alloy_loki_basic_auth_password is defined
+
+    - name: Write the scrape target of the active Ceph mgr
+      ansible.builtin.include_tasks: tasks/ceph-mgr-target.yml
+      when: alloy_ceph_mgr_target | default(false)
   tasks:
     - name: Install Alloy
       ansible.builtin.include_role:

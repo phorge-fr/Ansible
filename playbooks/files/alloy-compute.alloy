@@ -9,10 +9,13 @@
 //     they would come back identical from all three nodes; Ceph already reports the pool usage.
 //     incus_warnings_total is cluster-wide too and is kept from every node on purpose: use max without (instance).
 //   - Ceph metrics: only the ACTIVE mgr listens on its Prometheus port (checked live: the standbys don't open :9283
-//     at all), so scraping the local mgr on every node yields exactly one copy, and the copy follows the active mgr
-//     when it fails over. The two standby nodes therefore report up{job="ceph-mgr"} == 0 and log a "connection
-//     refused" scrape error every interval: expected, not a fault. Alert on the absence of ceph_health_status (no
-//     active mgr) or on max(up{job="ceph-mgr"}) == 0, never on a single instance.
+//     at all). A static target on every node would give the two standbys a permanent up{job="ceph-mgr"} == 0, which
+//     is both noise (TargetDown firing for good) and a lie (nothing is broken). So the target is not static: a small
+//     service (playbooks/tasks/ceph-mgr-target.yml) writes /run/alloy-ceph-mgr/targets.json every few seconds, with the
+//     local mgr as the only target when something listens on :9283 and an empty list otherwise, and Alloy reads it
+//     with discovery.file. A standby has no target at all, and the target follows the active mgr when it fails over
+//     (a gap of up to about a minute). There is exactly one copy of the metrics and up{job="ceph-mgr"} means what it
+//     says. A missing mgr is still caught by the absence of ceph_health_status (CephMgrAbsent).
 //   - Ceph cluster and audit logs: every mon writes its own identical copy of these two files. They are sent WITHOUT
 //     the instance label, so the three copies land in the same stream with the same timestamps and lines, which Loki
 //     ignores as duplicates. Daemon logs are read from the journal only, never from /var/log/ceph twice.
@@ -151,8 +154,14 @@ prometheus.relabel "incus" {
 
 // Ceph metrics (mgr Prometheus module, active mgr only, see the header)
 
+// The active mgr only, see the header: the file holds one target on the node that runs it, an empty list elsewhere.
+discovery.file "ceph_mgr" {
+  files            = ["/run/alloy-ceph-mgr/targets.json"]
+  refresh_interval = "15s"
+}
+
 discovery.relabel "ceph_mgr" {
-  targets = [{"__address__" = "127.0.0.1:9283"}]
+  targets = discovery.file.ceph_mgr.targets
 
   rule {
     target_label = "job"

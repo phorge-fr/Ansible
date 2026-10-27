@@ -1,0 +1,60 @@
+---
+# Tells Alloy whether this node runs the active Ceph mgr, see the Ceph metrics paragraph of files/alloy-compute.alloy.
+# Only the active mgr listens on :9283, so a service writes the one scrape target (127.0.0.1:9283) to
+# /run/alloy-ceph-mgr/targets.json when something listens there and an empty list otherwise. Included before Alloy by
+# setup-alloy.yml on the hosts that set alloy_ceph_mgr_target.
+
+- name: Install the script that writes the Ceph mgr target
+  ansible.builtin.copy:
+    dest: /usr/local/sbin/alloy-ceph-mgr-target
+    owner: root
+    group: root
+    mode: "0755"
+    content: |
+      #!/bin/bash
+      # Managed by Ansible (playbooks/tasks/ceph-mgr-target.yml).
+      set -u
+      f=/run/alloy-ceph-mgr/targets.json
+      while true; do
+        if ss -Hltn 'sport = :9283' | grep -q .; then
+          t='[{"targets":["127.0.0.1:9283"]}]'
+        else
+          t='[]'
+        fi
+        printf '%s\n' "$t" > "$f.tmp" && mv -f "$f.tmp" "$f"
+        sleep 10
+      done
+  register: alloy_ceph_mgr_target_script
+
+- name: Install the service that runs it
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/alloy-ceph-mgr-target.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Tell Alloy whether this node runs the active Ceph mgr
+      Before=alloy.service
+
+      [Service]
+      RuntimeDirectory=alloy-ceph-mgr
+      RuntimeDirectoryMode=0755
+      ExecStartPre=/bin/sh -c 'echo "[]" > /run/alloy-ceph-mgr/targets.json'
+      ExecStart=/usr/local/sbin/alloy-ceph-mgr-target
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+  register: alloy_ceph_mgr_target_unit
+
+# In --check mode the unit file above is not written, so systemd cannot find the service on a first run: skip the
+# start then (it is only skipped when the unit would have been created, a later run checks it normally).
+- name: Start the Ceph mgr target service
+  when: not (ansible_check_mode and alloy_ceph_mgr_target_unit.changed)
+  ansible.builtin.systemd_service:
+    name: alloy-ceph-mgr-target.service
+    daemon_reload: "{{ alloy_ceph_mgr_target_unit.changed }}"
+    enabled: true
+    state: "{{ 'restarted' if (alloy_ceph_mgr_target_script.changed or alloy_ceph_mgr_target_unit.changed) else 'started' }}"

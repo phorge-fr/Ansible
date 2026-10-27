@@ -272,6 +272,8 @@ alloy_systemd_override: |
   User=root
   EnvironmentFile=/etc/alloy-secrets.env
 alloy_config: "{{ lookup('ansible.builtin.file', 'alloy-compute.alloy') }}"
+# Scrape the Ceph mgr only where it is the active one, see playbooks/tasks/ceph-mgr-target.yml.
+alloy_ceph_mgr_target: true
 alloy_ca_cert: "{{ lookup('ansible.builtin.file', 'alloy-ca.crt') }}"
 
 # Each node scrapes its OWN Incus metrics endpoint - the address is the one Incus

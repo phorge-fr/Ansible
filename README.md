@@ -84,17 +84,17 @@ requirements:
 
 - [Ansible](https://ansible.com)
 
-1. Install the requirements
+1. Install the requirements:
 
-```bash
-ansible-galaxy install -r requirements.yml
-```
+   ```bash
+   ansible-galaxy install -r requirements.yml
+   ```
 
-2. Test environment
+2. Test the environment:
 
-```bash
-ansible -m ping all
-```
+   ```bash
+   ansible -m ping all
+   ```
 
 ## Encryption and execution
 

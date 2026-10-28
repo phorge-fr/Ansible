@@ -121,9 +121,7 @@ both by hand first: `ceph osd pool rm incus_<incus_name> incus_<incus_name>
 --yes-i-really-really-mean-it` (after `ceph config set mon
 mon_allow_pool_delete true`), and on OVN, delete every `Logical_Router`,
 `Logical_Switch`, `Address_Set`, `Port_Group`, `DHCP_Options`,
-`HA_Chassis_Group` and `NAT` row (`ovn-nbctl --bare --columns=_uuid list
-<table>` to find them, then the matching `ovn-nbctl <table>-del`/`destroy`
-command) before purging and re-running.
+`HA_Chassis_Group` and `NAT` row (`ovn-nbctl --bare --columns=_uuid list <table>` to find them, then the matching `ovn-nbctl <table>-del` or `destroy` command) before purging and re-running.
 
 ## Related
 

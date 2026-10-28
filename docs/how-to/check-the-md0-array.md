@@ -9,8 +9,7 @@ verified: 2026-10-03
 The md0 RAID5 on `stor-rpi5-01` (4 NVMe behind the ASMedia ASM1184e switch)
 holds `/mnt/main`, the NFS export used by Forgejo on the svc cluster and the
 rustfs S3 endpoint used by the Longhorn backups. A degraded array surviving a
-second dropout takes it down, so its integrity should be verified periodically
-- an mdadm `--re-add` only resyncs the blocks changed since the dropout (bitmap
+second dropout takes it down, so its integrity should be verified periodically: an mdadm `--re-add` only resyncs the blocks changed since the dropout (bitmap
 based), it does not prove the re-added disk matches the three others.
 
 ## Run a check

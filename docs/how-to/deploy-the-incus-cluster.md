@@ -101,7 +101,7 @@ especially after networks/storage pools have already been created - do
 **not** just purge the `incus` package and re-run:
 
 - A host that fails mid-play drops out of the batch for the rest of the run,
-  and `lxc.incus`'s "am I the bootstrap node" check
+  and the check of `lxc.incus` that asks whether this host is the bootstrap node
   (`incus_servers[0] == inventory_hostname`) is recomputed from whichever
   hosts are *still active* - so a later step (for example storage pool creation) can
   silently run on a **different** node than the one that created the

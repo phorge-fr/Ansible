@@ -20,7 +20,7 @@ It covers:
   instances.
 - Redundant storage with real [Ceph](https://ceph.io/) (not MicroCeph - same
   daemons, no snapd): one OSD per node on the spare NVMe disk.
-- Cluster tuning, ACME (Let's Encrypt via Cloudflare DNS-01), OIDC and Loki
+- Cluster tuning, ACME (Let's Encrypt via Cloudflare DNS-01), OIDC, and Loki
   logging via `incus config set` keys from `incus_init_shared_config`, and
   OpenFGA authorization - all applied by `configure-compute.yml` (see
   "Important: this is a one-shot bootstrap" below).
@@ -54,7 +54,7 @@ VM to Internet work, through the OVN routers' external addresses on the
 was `NO-CARRIER` - check with `ip -br link show enx...`. A node whose uplink has no
 link cannot carry the north-south traffic of the OVN routers scheduled on it.
 
-## Address plan, forwards and load balancers
+## Address plan, forwards, and load balancers
 
 | Range | Where | Use |
 |---|---|---|
@@ -78,7 +78,7 @@ forward rule that allows it in the Network repo.
 
 `configure-compute.yml` applies `incus_init.network.*.config` on a running cluster (compared key by key with the live
 config, the differing keys set in one command). Changing the `UPLINK`'s gateway and ranges on a live cluster is safe:
-each OVN network on it drops its now-invalid router address, detaches and gets a new one. Order when the plan changes:
+each OVN network on it drops its now-invalid router address, detaches, and gets a new one. Order when the plan changes:
 Network first (`tofu apply`, which needs `prevent_destroy` lifted for the comp-ns address), then `configure-compute.yml`.
 comp-ns carries live traffic, so this is not a maintenance-free change: the routers of the OVN networks on the `UPLINK`
 (and so the egress of the running instances) are interrupted while they re-attach with their new address, and again if
@@ -125,7 +125,7 @@ otherwise be stored three times:
 | Node metrics | `prometheus.exporter.unix` on each node | Local by nature. Virtual interfaces (tap, veth, OVN ports) and Incus/Ceph mounts are excluded so cardinality does not grow with the instances. |
 | Incus metrics | each node scrapes its own `core.metrics_address` | Per-node and per-instance series are local to a member. The cluster-wide ones (`incus_project_resources_total`, `incus_operations_total`, `incus_storage_pool_*`) are identical on all nodes and are dropped; `incus_warnings_total` is kept from every node on purpose (use `max without (instance)`). |
 | Ceph metrics | each node scrapes its local mgr on `:9283` | Only the active mgr listens on `:9283` (the standbys do not open it): one copy, following the active mgr on failover. The two standby nodes report `up{job="ceph-mgr"} == 0` and log a "connection refused" scrape error each interval, which is expected: alert on the absence of `ceph_health_status` or on `max(up{job="ceph-mgr"}) == 0`, never on a single instance. |
-| Journal | each node's own journal (incus, ceph-*, ovn-*, ssh, ...) | Local. Daemon logs are read from the journal only, never also from `/var/log/ceph`. |
+| Journal | each node's own journal (incus, ceph-*, ovn-*, ssh, and others) | Local. Daemon logs are read from the journal only, never also from `/var/log/ceph`. |
 | OVN / Open vSwitch logs | `/var/log/ovn`, `/var/log/openvswitch` | Files only, node-local. |
 | Ceph cluster and audit logs | `/var/log/ceph/ceph.log`, `ceph.audit.log` | Every mon writes an identical copy. Sent without the `instance` label so the three copies land in one stream with the same timestamps and lines, which Loki ignores as duplicates. |
 | Incus native Loki logger | Incus itself, `lifecycle,network-acl` only | Each member sends only its own events (checked in Loki: `instance == location` on every stream), and the daemon logs are not sent a second time. |

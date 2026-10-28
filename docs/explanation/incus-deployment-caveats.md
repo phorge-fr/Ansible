@@ -24,7 +24,7 @@ Every task in `lxc.incus.incus` that sets `core.https_address`/
 `cluster.https_address`, applies `incus_init.config`, creates networks/storage
 pools, bootstraps the cluster and creates join tokens only runs on the
 Ansible run where the `incus` package transitions from absent to present.
-**Re-running `setup-compute.yml` after the cluster is up will not reapply
+**Re-running `setup-compute.yml` after the cluster is up does not reapply
 changes** to `incus_init` (a new network, a config tweak, a fourth node). This
 is the vendored collection's own design. Day-2 changes go through `configure-compute.yml`
 (above), not through re-running `setup-compute.yml`.

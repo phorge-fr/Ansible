@@ -31,8 +31,8 @@ Secrets are Ansible Vault values in `inventories/production/{group_vars,host_var
 - **The firewall role only governs host-terminated ports.** It cannot close Kubernetes LoadBalancer addresses or NodePorts ([decision 0002](docs/decisions/0002-firewall-scope.md)). Do not promise otherwise.
 - Prefer the role over an ad-hoc command on a node. A hand change to a managed host must be reconciled by the role afterwards.
 - Before rebooting or touching a node that serves others (the storage node serves NFS to the Forgejo cluster), say what it will interrupt and wait for the maintainer.
-- Storage node: never remove, rescan or reset a PCIe device that is a member of the RAID array while another member shares its interrupt line, and never on a degraded array ([runbook](docs/runbooks/stor-nvme-pcie-irq.md)).
+- Storage node: never remove, rescan or reset a PCIe device that is a member of the RAID array while another member shares its interrupt line, and never on a degraded array ([explanation](docs/explanation/storage-node-nvme-dropout.md)).
 
 ## Where to look
 
-[docs/decisions/](docs/decisions/README.md), [docs/runbooks/](docs/runbooks/README.md), [docs/patch-management.md](docs/patch-management.md), [docs/md0-check.md](docs/md0-check.md), [docs/incus-installation.md](docs/incus-installation.md).
+[docs/](docs/README.md): the index of every page by type: how-to guides, reference, explanation and decisions.

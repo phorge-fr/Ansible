@@ -1,4 +1,10 @@
-# md0 integrity check on stor-rpi5-01
+---
+type: how-to
+audience: maintainer verifying the storage node RAID array
+verified: 2026-10-03
+---
+
+# Check the md0 array
 
 The md0 RAID5 on `stor-rpi5-01` (4 NVMe behind the ASMedia ASM1184e switch)
 holds `/mnt/main`, the NFS export used by Forgejo on the svc cluster and the
@@ -30,7 +36,7 @@ A full pass over ~750 GB takes about half an hour at the ~100 MB/s the node
 sustains. NFS and rustfs keep working during the run; the concurrent IO is
 negligible at that speed.
 
-## Reading the result
+## Read the result
 
 - `mismatch_cnt` stays 0 for the whole run: the array is coherent, nothing to
   do until the next check.
@@ -39,11 +45,9 @@ negligible at that speed.
   block), check SMART (`nvme-cli`/`smartmontools` are not installed on the
   node yet - see issue #7's out-of-scope note), and only then decide whether
   the parity or the data is the side to trust. Rewriting the parity over
-  silently-corrupted data is exactly how a broken block gets replicated
+  data that is silently corrupted is exactly how a broken block gets replicated
   everywhere.
 
-## History
+## Related
 
-- 2026-10-03: first full check after the 2026-09-20 `--re-add` of `nvme3` (the
-  dropout of 2026-07-06, see issue #7): `mismatch_cnt` stayed 0 for the whole
-  run.
+- [The storage node NVMe dropout](../explanation/storage-node-nvme-dropout.md)

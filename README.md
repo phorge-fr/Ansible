@@ -18,7 +18,7 @@ inventories/production/
   host_vars/              # per-host variables
 playbooks/                # one playbook per concern, see below
 roles/                    # project roles (Galaxy roles are installed here but gitignored)
-docs/                     # manual procedures not yet automated
+docs/                     # how-to, reference, explanation and decisions (docs/README.md)
 ```
 
 ## Inventory and playbooks
@@ -28,7 +28,7 @@ docs/                     # manual procedures not yet automated
 | `control`, `core`, `svc` | k0s cluster nodes (managed by FrontPlane) | `setup-alloy.yml` only | `grafana.grafana.alloy` |
 | `storage` | `stor-rpi5-01` | `setup-storage.yml` | `rolehippie.mdadm`, `geerlingguy.nfs`, `docker`, `rustfs` |
 | `hpc` (`hpc-gpu`, `hpc-npu`) | `ai-z440-01`, `ai-rpi5-01` | none yet, see the note under Roles | - |
-| `compute` | `comp-opti-01` to `03` | `setup-compute.yml` (bootstrap), `configure-compute.yml` (day-2 config), see [docs/incus-installation.md](docs/incus-installation.md) | `lxc.incus.system_settings`, `lxc.incus.ceph`, `lxc.incus.ovn`, `lxc.incus.incus` |
+| `compute` | `comp-opti-01` to `03` | `setup-compute.yml` (bootstrap), `configure-compute.yml` (day-2 config), see [docs/reference/incus-cluster.md](docs/reference/incus-cluster.md) | `lxc.incus.system_settings`, `lxc.incus.ceph`, `lxc.incus.ovn`, `lxc.incus.incus` |
 | `all` | every host | `setup-alloy.yml` | `grafana.grafana.alloy` |
 | `all` | every host | `setup-hardening.yml` | `ssh_hardening` |
 | `all` | every host | `setup-firewall.yml` (one node at a time, `enforce` on `control`, `core`, `svc` and `storage`, `audit` elsewhere) | `firewall` |
@@ -48,7 +48,7 @@ The `storage` configuration is [playbooks/files/alloy-storage.alloy](playbooks/f
 
 `setup-kernel-cmdline.yml` appends kernel parameters to the boot command line of the Raspberry Pi 5 nodes: idempotent, guarded (single line, `root=` kept, `.bak` backup, read-back), and it reports the hosts that need a reboot instead of rebooting them - OS reboots stay under manual control.
 
-`patch.yml` is the manual, interactive patch tool: it reports the pending apt updates, the packages that rewrite `/boot` and the reboot flag of every targeted host as one plan, asks a single yes/no to apply it (a refusal ends the run without touching anything), then patches the hosts **one at a time** - upgrading each, proving dpkg finished and `/boot` is still bootable, asking whether to reboot it, and waiting for it to come back healthy before touching the next. The first failure stops the rollout. The upgrade runs as a transient systemd unit rather than a child of the SSH session, so a dropped connection or a Ctrl-C can no longer leave dpkg half-way - which is what left `svc-rock64-01` unbootable on 2026-10-03. It sets up no automatic update mechanism of any kind: patching stays a hand-run action during a planned maintenance window. See [docs/patch-management.md](docs/patch-management.md) for the flow and the run commands, and [roles/patch](roles/patch/README.md) for the three entry points it is built from.
+`patch.yml` is the manual, interactive patch tool: it reports the pending apt updates, the packages that rewrite `/boot` and the reboot flag of every targeted host as one plan, asks a single yes/no to apply it (a refusal ends the run without touching anything), then patches the hosts **one at a time** - upgrading each, proving dpkg finished and `/boot` is still bootable, asking whether to reboot it, and waiting for it to come back healthy before touching the next. The first failure stops the rollout. The upgrade runs as a transient systemd unit rather than a child of the SSH session, so a dropped connection or a Ctrl-C can no longer leave dpkg half-way - which is what left `svc-rock64-01` unbootable on 2026-10-03. It sets up no automatic update mechanism of any kind: patching stays a hand-run action during a planned maintenance window. See [docs/how-to/patch-the-nodes.md](docs/how-to/patch-the-nodes.md) for the flow and the run commands, and [roles/patch](roles/patch/README.md) for the three entry points it is built from.
 
 `setup-longhorn-nodes.yml` installs what Longhorn checks for on the `core` nodes themselves - `nfs-common` and `cryptsetup`, plus `dm_crypt` through `modules-load.d` - which `RequiredPackages` and `KernelModulesLoaded` report on each `nodes.longhorn.io` object. Without them RWX volumes (the share manager exports them over NFS) and encrypted volumes are unavailable. `rpcbind` comes in as a dependency and is turned off: the share manager serves NFSv4, which needs no portmapper. The two conditions only clear once `longhorn-manager` restarts on each node, since that is when Longhorn evaluates them - see the playbook header.
 
@@ -56,7 +56,7 @@ The `storage` configuration is [playbooks/files/alloy-storage.alloy](playbooks/f
 
 `setup-network-mtu.yml` sets an explicit MTU where one is needed, and nowhere else. The RouterOS VLANs are all at 8152 while the hosts default to 1500; on most VLANs that mismatch is latent, since the router only emits an oversized frame if it receives one and no host originates one. `comp-ew` is the exception: it carries the OVN Geneve tunnels, and Geneve's 58 bytes capped instances at 1442 - which left them depending on PMTUD, itself broken by the router fastracking established flows with no MSS clamping. Raising `comp-ew` to 8152 gives instances a clean 1500 and lets Ceph replication use jumbo on the same wire. Measured rather than assumed: 8152-byte frames pass through the CSS326 switch, whose SNMP `ifMtu` of 1500 is the IF-MIB default and not a forwarding limit. Changing the MTU bounces the link and Ceph notices, so it rolls one node at a time behind the same health gate as `upgrade-compute.yml`.
 
-`setup-compute.yml` deploys a 3-node Incus HA cluster (`configure-compute.yml` then applies every later config change: ACME, OIDC, Loki, OpenFGA authorization) (Ceph storage, OVN networking) via the vendored [`lxc.incus`](https://github.com/lxc/incus-deploy) collection - see [docs/incus-installation.md](docs/incus-installation.md) for the variable scheme, the prerequisites that still need real values, and `playbooks/teardown-compute.yml`, its destructive counterpart to return a node to a clean state (`-e teardown_confirm=true`).
+`setup-compute.yml` deploys a 3-node Incus HA cluster (`configure-compute.yml` then applies every later config change: ACME, OIDC, Loki, OpenFGA authorization) (Ceph storage, OVN networking) via the vendored [`lxc.incus`](https://github.com/lxc/incus-deploy) collection - see [docs/reference/incus-cluster.md](docs/reference/incus-cluster.md) for the variable scheme, the prerequisites that still need real values, and `playbooks/teardown-compute.yml`, its destructive counterpart to return a node to a clean state (`-e teardown_confirm=true`).
 
 ## Roles
 

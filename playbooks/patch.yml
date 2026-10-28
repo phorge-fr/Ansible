@@ -17,7 +17,7 @@
 #
 # Three properties make this safe to run against a quorum-based cluster, and
 # all three come from svc-rock64-01 bricking itself on 2026-10-03 (see
-# docs/patch-management.md for the post-mortem):
+# docs/explanation/patch-management-design.md for the post-mortem):
 #   - the upgrade runs as a transient systemd unit, not as a child of the SSH
 #     session, so losing the connection or pressing Ctrl-C can no longer stop
 #     dpkg half-way (patch role, apt-detached);

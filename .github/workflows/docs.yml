@@ -1,0 +1,20 @@
+name: docs
+
+on:
+  pull_request:
+    paths:
+      - docs/**
+      - "*.md"
+      - .github/workflows/docs.yml
+  schedule:
+    - cron: "41 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    uses: phorge-fr/.github/.github/workflows/docs-lint.yml@main
+    with:
+      external-links: ${{ github.event_name != 'pull_request' }}

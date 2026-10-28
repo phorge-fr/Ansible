@@ -1,7 +1,7 @@
 ---
 # lxc.incus.incus's incus_init.config only ever gets applied on the run where
 # the incus package transitions from absent to present (see the note in
-# group_vars/compute.yml and docs/incus-installation.md) - it's a one-shot
+# group_vars/compute.yml and docs/explanation/incus-deployment-caveats.md) - it's a one-shot
 # bootstrap, not a reconciler. Once the cluster is up, day-2 changes to
 # incus_init_shared_config/incus_init_node_config (a new key, a changed
 # value) go through this playbook instead of re-running setup-compute.yml.

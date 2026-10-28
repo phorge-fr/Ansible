@@ -139,3 +139,15 @@ ansible-playbook playbooks/<playbook>.yml --list-hosts
 `--list-hosts` must list at least one host: a playbook whose `hosts:` pattern matches no inventory group is skipped silently.
 
 The first two are also enforced by CI: [.github/workflows/validate.yml](.github/workflows/validate.yml) runs `ansible-lint` and `--syntax-check` on every pull request to `main` and on every push to `dev`. It needs no secrets - `vault_pass` is gitignored, and neither check has to decrypt anything - but it does install the pinned collections from `requirements.yml`, since `collections/` is gitignored and a fresh checkout cannot resolve `lxc.incus.*` or `grafana.grafana.*` without them.
+
+## Contributing
+
+Every change starts from an issue and goes through a pull request; the rules (issue link, label, milestone, assignee, reviewer) are in the organization's [GOVERNANCE](https://github.com/phorge-fr/.github/blob/main/GOVERNANCE.md) and [CONTRIBUTING](https://github.com/phorge-fr/.github/blob/main/CONTRIBUTING.md). Planned work is on the public [Roadmap](https://github.com/orgs/phorge-fr/projects/3). Everyone taking part follows the [Code of Conduct](https://github.com/phorge-fr/.github/blob/main/CODE_OF_CONDUCT.md).
+
+## Security
+
+Report vulnerabilities privately, as described in the [security policy](https://github.com/phorge-fr/.github/blob/main/SECURITY.md). Do not open a public issue for them.
+
+## License
+
+No license has been chosen yet, so the code is not yet open for reuse; the decision is tracked in [phorge-fr/.github#18](https://github.com/phorge-fr/.github/issues/18).

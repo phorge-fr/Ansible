@@ -150,4 +150,4 @@ Report vulnerabilities privately, as described in the [security policy](https://
 
 ## License
 
-No license has been chosen yet, so the code is not yet open for reuse; the decision is tracked in [phorge-fr/.github#18](https://github.com/phorge-fr/.github/issues/18).
+Licensed under the [Apache License 2.0](LICENSE).

@@ -2,10 +2,6 @@ name: docs
 
 on:
   pull_request:
-    paths:
-      - docs/**
-      - "*.md"
-      - .github/workflows/docs.yml
   schedule:
     - cron: "41 5 * * 1"
   workflow_dispatch:

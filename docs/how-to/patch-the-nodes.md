@@ -48,7 +48,7 @@ and the summary readable (the default JSON-ish callback flattens them).
   patched on top of a broken state.
 - `!! REWRITES /boot` in the plan means the upgrade includes a package whose
   postinst rebuilds the boot files (`linux-image*`, `initramfs-tools`,
-  `armbian-bsp*`, `raspi-firmware`, `u-boot*`, ...). Those are the upgrades
+  `armbian-bsp*`, `raspi-firmware`, `u-boot*`, and others). Those are the upgrades
   that can leave a host unbootable, and the ones worth a maintenance window.
 - If apt is reported as `STILL RUNNING` (exit 124), it was deliberately left
   alone: the unit is still working under systemd. Re-run the playbook to pick

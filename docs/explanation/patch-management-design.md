@@ -50,7 +50,7 @@ properties of this playbook each address one link in that chain.
 
 The `patch` role's `apt-detached` entry point runs apt as a transient systemd unit owned
 by PID 1, not as a child of the Ansible SSH session, and then follows it from
-the outside. Losing the connection, hitting an Ansible timeout or pressing
+the outside. Losing the connection, hitting an Ansible timeout, or pressing
 Ctrl-C now kills only the *watching*, never dpkg: the transaction always
 reaches a consistent state.
 
@@ -75,7 +75,7 @@ before the reboot question:
 
 Checks 1 and 3 would each have caught `svc-rock64-01` on their own. It is
 bootloader-agnostic on purpose: the invariants hold on Armbian/U-Boot
-(`Image`, `uInitrd`), on the Raspberry Pi and on GRUB alike.
+(`Image`, `uInitrd`), on the Raspberry Pi, and on GRUB alike.
 
 If `/boot` is inconsistent the run **fails there and the reboot is never
 offered** - the host is still perfectly alive on its loaded kernel, and
@@ -95,4 +95,4 @@ before the next node.
 The three bricks live in [roles/patch](../../roles/patch/README.md) - `survey`,
 `apt-detached` and `check-boot-consistency` - each with its arguments declared
 in the role's `meta/argument_specs.yml`. This playbook keeps only the
-orchestration: the plan, the prompts and the serialisation.
+orchestration: the plan, the prompts, and the serialisation.

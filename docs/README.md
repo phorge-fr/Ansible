@@ -7,7 +7,7 @@ Pages are grouped by what the reader wants, following [the organization's docume
 | Page | Task |
 | --- | --- |
 | [Patch the nodes](how-to/patch-the-nodes.md) | Apply OS updates in a planned window |
-| [Deploy the Incus cluster](how-to/deploy-the-incus-cluster.md) | Bootstrap, roll back or recover the Incus cluster |
+| [Deploy the Incus cluster](how-to/deploy-the-incus-cluster.md) | Bootstrap, roll back, or recover the Incus cluster |
 | [Change the north-south range](how-to/change-the-north-south-range.md) | Change the address range of a running cluster |
 | [Check the md0 array](how-to/check-the-md0-array.md) | Verify the storage node RAID integrity |
 

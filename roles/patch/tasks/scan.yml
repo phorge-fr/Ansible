@@ -7,7 +7,11 @@
 # only "fixable now" when the package carrying the fix is in that list.
 #
 # Output:
-#   patch_scan_lines   the lines appended to the host's plan entry
+#   patch_scan_lines     the lines appended to the host's plan entry
+#   patch_fix_targets    pending packages with a fix that need no reboot
+#   patch_fix_deferred   pending packages with a fix that rewrite /boot (need a reboot)
+#   patch_fix_handover   pending packages with a fix that another playbook owns
+#   patch_kernel_running, patch_kernel_newest   see kernel-state.yml
 
 - name: Look for debsecan
   ansible.builtin.shell: command -v debsecan
@@ -19,29 +23,21 @@
   check_mode: false
 
 # debsecan only knows suites up to bullseye by name, so the suite is passed
-# explicitly. The newest kernel is looked for among the installed modules of
-# the running flavour: a Raspberry Pi keeps two flavours side by side
-# (rpi-v8 and rpi-2712) and only the running one is comparable.
-- name: Read the release, the running kernel and the newest installed one
-  ansible.builtin.shell: |
-    set -o pipefail
-    . /etc/os-release
-    running=$(uname -r)
-    flavour=${running##*-}
-    newest=$(find /lib/modules -mindepth 2 -maxdepth 2 -name modules.dep -printf '%h\n' \
-      | xargs -rn1 basename | grep -- "-${flavour}$" | sort -V | tail -1)
-    printf '%s|%s|%s\n' "$VERSION_CODENAME" "$running" "${newest:-$running}"
+# explicitly.
+- name: Read the Debian release
+  ansible.builtin.shell: . /etc/os-release && printf '%s' "$VERSION_CODENAME"
   args:
     executable: /bin/bash
   register: patch_scan_env
   changed_when: false
   check_mode: false
 
-- name: Record the release and the kernels
+- name: Record the Debian release
   ansible.builtin.set_fact:
-    patch_scan_suite: "{{ patch_scan_env.stdout.split('|')[0] }}"
-    patch_kernel_running: "{{ patch_scan_env.stdout.split('|')[1] }}"
-    patch_kernel_newest: "{{ patch_scan_env.stdout.split('|')[2] }}"
+    patch_scan_suite: "{{ patch_scan_env.stdout }}"
+
+- name: Read the kernel state
+  ansible.builtin.include_tasks: kernel-state.yml
 
 # One line per package: name|CVE count|remotely exploitable|high urgency|first
 # CVE ids. A failure is reported as "ERROR|reason" rather than as an empty
@@ -66,6 +62,28 @@
   changed_when: false
   check_mode: false
   when: patch_debsecan.rc == 0
+
+# A fix is applied without a reboot when its package is pending and is not one
+# of the kernel, firmware and bootloader packages (the ones that rewrite /boot,
+# see patch_boot_packages_regex) or of the packages another playbook owns.
+# Those are kept apart and reported, never upgraded by the targeted mode.
+- name: Find the pending packages that carry a fix
+  ansible.builtin.set_fact:
+    patch_fix_candidates: >-
+      {{ (patch_scan.stdout_lines | map('split', '|') | map('first') | list
+          | intersect(patch_pending.stdout_lines | map('split', ' ') | map('first') | list))
+         if (patch_debsecan.rc == 0 and not patch_scan.stdout.startswith('ERROR|')) else [] }}
+
+- name: Split the fixes into those that need a reboot and those that do not
+  ansible.builtin.set_fact:
+    patch_fix_deferred: "{{ patch_fix_candidates | select('match', patch_boot_packages_regex) | list }}"
+    patch_fix_handover: >-
+      {{ (patch_fix_candidates | select('match', patch_handover_regex) | list)
+         if (patch_handover_regex | length > 0) else [] }}
+
+- name: Keep the fixes the targeted mode may apply
+  ansible.builtin.set_fact:
+    patch_fix_targets: "{{ patch_fix_candidates | difference(patch_fix_deferred) | difference(patch_fix_handover) }}"
 
 - name: Build the vulnerability lines of the plan entry
   ansible.builtin.set_fact:

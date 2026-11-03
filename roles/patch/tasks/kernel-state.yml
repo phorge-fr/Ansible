@@ -1,0 +1,29 @@
+---
+# Read the running kernel and the newest installed kernel of the same flavour.
+# Read-only. Run again after a patch to know whether a reboot would still
+# change the kernel.
+#
+# The newest kernel is looked for among the installed modules of the running
+# flavour: a Raspberry Pi keeps two flavours side by side (rpi-v8 and
+# rpi-2712) and only the running one is comparable.
+#
+# Output:  patch_kernel_running   uname -r
+#          patch_kernel_newest    newest installed kernel of the same flavour
+- name: Read the running kernel and the newest installed one
+  ansible.builtin.shell: |
+    set -o pipefail
+    running=$(uname -r)
+    flavour=${running##*-}
+    newest=$(find /lib/modules -mindepth 2 -maxdepth 2 -name modules.dep -printf '%h\n' \
+      | xargs -rn1 basename | grep -- "-${flavour}$" | sort -V | tail -1)
+    printf '%s|%s\n' "$running" "${newest:-$running}"
+  args:
+    executable: /bin/bash
+  register: patch_kernel_state
+  changed_when: false
+  check_mode: false
+
+- name: Record the kernels
+  ansible.builtin.set_fact:
+    patch_kernel_running: "{{ patch_kernel_state.stdout.split('|')[0] }}"
+    patch_kernel_newest: "{{ patch_kernel_state.stdout.split('|')[1] }}"

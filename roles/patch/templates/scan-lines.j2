@@ -18,8 +18,17 @@
     {{ r[0] }} -> {{ pending[r[0]] }}: {{ r[1] }} CVE(s){{ ' - REMOTELY EXPLOITABLE' if r[2] == '1' else '' }}{{ ' - high urgency' if r[3] == '1' else '' }} ({{ r[4] }}{{ ', ...' if r[1] | int > 3 else '' }})
 {% endfor %}
 {% endif %}
+{% if patch_fix_targets | length > 0 %}
+  mode "fixes" upgrades now, no reboot needed: {{ patch_fix_targets | join(', ') }}
+{% endif %}
+{% if patch_fix_deferred | length > 0 %}
+  !! mode "fixes" leaves for a reboot window (rewrites /boot): {{ patch_fix_deferred | join(', ') }}
+{% endif %}
+{% if patch_fix_handover | length > 0 %}
+  !! mode "fixes" leaves to {{ patch_handover_playbook }}: {{ patch_fix_handover | join(', ') }}
+{% endif %}
 {% if stuck | length > 0 %}
-  !! fixed in the archive but no pending update (held back, or needs dist-upgrade): {{ stuck | map(attribute=0) | join(', ') }}
+  !! fixed in Debian but no pending update (held back, a vendor build such as +rpt, or the fix is not in the apt sources): {{ stuck | map(attribute=0) | join(', ') }}
 {% endif %}
 {% endif %}
 {% if patch_kernel_newest != patch_kernel_running %}

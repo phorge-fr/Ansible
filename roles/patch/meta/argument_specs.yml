@@ -52,3 +52,26 @@ argument_specs:
       - Looks for a dangling symlink, a half-written file, an empty kernel or
         initramfs artifact, and a newest kernel with no usable initramfs.
       - Sets patch_boot_problems, empty when /boot looks sane. Read-only.
+
+  kernel-state:
+    short_description: Compare the running kernel with the newest installed one
+    description:
+      - Sets patch_kernel_running and patch_kernel_newest. The newest kernel is
+        looked for among the installed modules of the running flavour. Read-only.
+    options: {}
+
+  fix-simulate:
+    short_description: Simulate the targeted upgrade of the packages that carry a CVE fix
+    description:
+      - Runs apt-get in simulation mode on patch_fix_targets and sets patch_fix_go,
+        false when apt would also upgrade a kernel, a bootloader or a package
+        another playbook owns. Read-only.
+    options:
+      patch_fix_targets:
+        type: list
+        elements: str
+        required: true
+        description: The pending packages to upgrade, as computed by survey.
+      patch_boot_packages_regex:
+        type: str
+        description: Matches the packages whose postinst rewrites /boot.

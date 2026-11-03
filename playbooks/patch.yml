@@ -6,10 +6,13 @@
 #   2. show ONE plan: the pending packages per host, the CVEs they fix
 #      (debsecan), which upgrades touch the kernel or the initramfs, and any
 #      host that looks unsafe to patch;
-#   3. ask ONE yes/no - "no" ends the run there without touching anything;
+#   3. ask ONE question - "all" (every pending update), "fixes" (only the
+#      packages that close a CVE and need no reboot) or "no", which ends the
+#      run there without touching anything;
 #   4. then, ONE HOST AT A TIME: upgrade it, prove dpkg finished and /boot is
-#      still bootable, ask whether to reboot it, and wait for it to come back
-#      healthy before moving to the next host.
+#      still bootable, and - in "all" mode only - ask whether to reboot it and
+#      wait for it to come back healthy before moving to the next host. The
+#      "fixes" mode never reboots: the run ends with the hosts that need one.
 # It sets up no automatic update mechanism of any kind - patching stays a
 # manual action run when a maintenance window is planned.
 #
@@ -65,19 +68,32 @@
       loop_control:
         label: "{{ item }}"
 
-    - name: Ask once whether to apply the updates  # noqa: run-once[task]
+    - name: Ask once what to apply  # noqa: run-once[task]
       ansible.builtin.pause:
         prompt: |-
           {{ ansible_play_hosts | length }} host(s) to patch, one at a time.
           Lines marked !! above are the ones worth reading twice.
-          Apply these updates now? [yes/no]
+          What to apply?
+            all    every pending update, and a question before each reboot
+            fixes  only the packages that close a CVE and need no reboot;
+                   never reboots, and lists the hosts that need one at the end
+            no     nothing
+          [all/fixes/no]
       register: patch_decision
       run_once: true
       when: not ansible_check_mode
 
     - name: Remember the decision on every host
       ansible.builtin.set_fact:
-        patch_apply: "{{ (hostvars[ansible_play_hosts[0]].patch_decision.user_input | default('') | trim | lower) in ['yes', 'y', 'oui'] }}"
+        patch_answer: "{{ hostvars[ansible_play_hosts[0]].patch_decision.user_input | default('') | trim | lower }}"
+
+    - name: Turn the answer into a mode
+      ansible.builtin.set_fact:
+        patch_mode: "{{ 'all' if patch_answer in ['all', 'a', 'yes', 'y', 'oui'] else ('fixes' if patch_answer in ['fixes', 'fix', 'f'] else 'none') }}"
+
+    - name: Remember whether anything is to be applied
+      ansible.builtin.set_fact:
+        patch_apply: "{{ patch_mode != 'none' }}"
 
     - name: Stop the run when the plan is refused
       ansible.builtin.meta: end_host
@@ -113,14 +129,70 @@
           -o Dpkg::Options::=--force-confold
           {{ 'dist-upgrade' if patch_upgrade == 'dist' else 'upgrade' }}
         patch_detached_timeout: 5400
-      when: not ansible_check_mode and (patch_apply | default(false) | bool)
+      when: not ansible_check_mode and (patch_mode | default('none')) == 'all'
+
+    # Targeted mode: simulate first, because apt may drag in more than the
+    # named packages. A host whose simulation would pull a kernel, a bootloader
+    # or a package another playbook owns is skipped and reported, not failed:
+    # the rest of the rollout is not blocked by one host that needs a window.
+    - name: Simulate the targeted upgrade
+      ansible.builtin.include_role:
+        name: patch
+        tasks_from: fix-simulate
+      when: >-
+        (ansible_check_mode or (patch_mode | default('none')) == 'fixes')
+        and patch_fix_targets | length > 0
+
+    - name: Say why this host is skipped in fixes mode
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: fixes mode skips this host, {{ patch_fix_problem }}"
+      when: >-
+        (patch_mode | default('none')) == 'fixes'
+        and patch_fix_targets | length > 0
+        and not (patch_fix_go | default(false) | bool)
+
+    - name: Upgrade only the packages that close a CVE, detached from this SSH session
+      ansible.builtin.include_role:
+        name: patch
+        tasks_from: apt-detached
+      vars:
+        patch_detached_name: fixes
+        patch_detached_command: >-
+          apt-get -y
+          -o Dpkg::Options::=--force-confdef
+          -o Dpkg::Options::=--force-confold
+          install --only-upgrade
+          {{ patch_fix_targets | map('quote') | join(' ') }}
+        patch_detached_timeout: 5400
+      when: >-
+        not ansible_check_mode and (patch_mode | default('none')) == 'fixes'
+        and patch_fix_targets | length > 0 and (patch_fix_go | default(false) | bool)
+
+    - name: Remember whether an upgrade ran on this host
+      ansible.builtin.set_fact:
+        patch_upgrade_ran: >-
+          {{ not ansible_check_mode and (
+               (patch_mode | default('none')) == 'all'
+               or ((patch_mode | default('none')) == 'fixes'
+                   and patch_fix_targets | length > 0
+                   and (patch_fix_go | default(false) | bool))) }}
+
+    - name: Describe what the fixes mode would do
+      ansible.builtin.set_fact:
+        patch_fix_extra_text: "{{ ' (and, as dependencies, ' ~ (patch_fix_extra | join(', ')) ~ ')' if patch_fix_extra | default([]) | length > 0 else '' }}"
+        patch_fix_skip_text: "{{ ' - SKIPPED, ' ~ patch_fix_problem if (patch_fix_go is defined and not patch_fix_go) else '' }}"
+        patch_fix_left: "{{ patch_fix_deferred + patch_fix_handover }}"
+      when: ansible_check_mode
 
     - name: Report what would be upgraded
       ansible.builtin.debug:
         msg: >-
           {{ inventory_hostname }}: would upgrade
           {{ patch_pending.stdout_lines | length }} package(s)
-          {{ ('(of which ' ~ (patch_boot_packages | join(', ')) ~ ' rewrite /boot)') if patch_boot_packages | length > 0 else '' }}
+          {{ ('(of which ' ~ (patch_boot_packages | join(', ')) ~ ' rewrite /boot)') if patch_boot_packages | length > 0 else '' }}.
+          Fixes mode would upgrade {{ patch_fix_targets | length }} package(s) now
+          ({{ patch_fix_targets | join(', ') }}){{ patch_fix_extra_text }}{{ patch_fix_skip_text }}
+          and leave {{ patch_fix_left | length }} for a reboot window ({{ patch_fix_left | join(', ') }})
       when: ansible_check_mode
 
     - name: Fail when the upgrade did not finish cleanly
@@ -134,7 +206,7 @@
              else 'See /var/log/phorge-patch-upgrade.log on the host.' }}
           Last output: {{ patch_detached.stdout_lines | default([]) | join(' | ') }}
         quiet: true
-      when: not ansible_check_mode and (patch_apply | default(false) | bool)
+      when: patch_upgrade_ran | default(false) | bool
 
     - name: Check that dpkg finished every package
       ansible.builtin.shell: |
@@ -208,7 +280,9 @@
           /boot checked consistent, dpkg clean, {{ patch_applied_list | length }} package(s) upgraded.
           Reboot it now? [yes/no]
       register: patch_reboot_answer
-      when: not ansible_check_mode and patch_reboot_required.stat.exists
+      when: >-
+        not ansible_check_mode and (patch_mode | default('none')) == 'all'
+        and patch_reboot_required.stat.exists
 
     - name: Reboot this host
       ansible.builtin.reboot:
@@ -216,6 +290,7 @@
       register: patch_rebooted
       when: >-
         not ansible_check_mode
+        and (patch_mode | default('none')) == 'all'
         and patch_reboot_required.stat.exists
         and (patch_reboot_answer.user_input | default('') | trim | lower) in ['yes', 'y', 'oui']
 
@@ -253,13 +328,32 @@
         quiet: true
       when: patch_rebooted.rebooted | default(false) | bool
 
+    # What a reboot would still change on this host, read after the run (and
+    # after the reboot, when there was one). The final summary lists it: the
+    # "fixes" mode never reboots, so this is how the maintainer is told.
+    - name: Read the kernel state after the run
+      ansible.builtin.include_role:
+        name: patch
+        tasks_from: kernel-state
+
+    - name: Record why this host needs a reboot
+      ansible.builtin.set_fact:
+        patch_reboot_reasons: >-
+          {{ (['the reboot-required flag is set'] if (patch_reboot_required.stat.exists and not (patch_rebooted.rebooted | default(false) | bool)) else [])
+             + (['running kernel ' ~ patch_kernel_running ~ ', ' ~ patch_kernel_newest ~ ' is installed']
+                if patch_kernel_running != patch_kernel_newest else [])
+             + (['fix(es) left for a reboot window: ' ~ (patch_fix_deferred | join(', '))]
+                if ((patch_mode | default('none')) == 'fixes' and patch_fix_deferred | length > 0) else []) }}
+      when: not ansible_check_mode and (patch_apply | default(false) | bool)
+
     - name: Build this host's summary line
       ansible.builtin.set_fact:
         patch_summary_line: >-
           {{ inventory_hostname }}: {{ patch_applied_list | length }} upgraded,
           {{ patch_pending_after.stdout_lines | length }} still pending,
           reboot required: {{ patch_reboot_required.stat.exists }},
-          rebooted: {{ (patch_rebooted.rebooted | default(false)) | bool }}
+          rebooted: {{ (patch_rebooted.rebooted | default(false)) | bool }},
+          mode: {{ patch_mode | default('none') }}
           {{ ('(now on ' ~ (patch_post_boot.stdout
                 | regex_search('kernel=(\S+)', '\\1') | first) ~ ')')
              if patch_rebooted.rebooted | default(false) | bool else '' }}
@@ -276,3 +370,25 @@
       ansible.builtin.debug:
         msg: "{{ hostvars | dict2items | selectattr('value.patch_summary_line', 'defined') | map(attribute='value.patch_summary_line') | list }}"
       run_once: true
+
+    # The "fixes" mode never reboots, and "all" leaves a host as it is when the
+    # reboot is declined: this is the notification that a reboot is still due.
+    - name: Tell which hosts still need a reboot  # noqa: run-once[task]
+      ansible.builtin.debug:
+        msg: "REBOOT NEEDED on {{ item.key }} (not rebooted): {{ item.value.patch_reboot_reasons | join(' ; ') }}"
+      loop: >-
+        {{ hostvars | dict2items | selectattr('value.patch_reboot_reasons', 'defined')
+           | rejectattr('value.patch_reboot_reasons', 'equalto', []) | list }}
+      loop_control:
+        label: "{{ item.key }}"
+      run_once: true
+
+    - name: Say that no host needs a reboot  # noqa: run-once[task]
+      ansible.builtin.debug:
+        msg: No host needs a reboot.
+      run_once: true
+      when: >-
+        not ansible_check_mode
+        and (hostvars | dict2items | selectattr('value.patch_reboot_reasons', 'defined')
+             | rejectattr('value.patch_reboot_reasons', 'equalto', []) | list | length) == 0
+        and (hostvars | dict2items | selectattr('value.patch_reboot_reasons', 'defined') | list | length) > 0

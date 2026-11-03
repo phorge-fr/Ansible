@@ -1,7 +1,7 @@
 # patch
 
 The pieces `playbooks/patch.yml` is built from. The role holds no `main.yml`
-on purpose: it is three independent entry points, included with `tasks_from`.
+on purpose: it is independent entry points, included with `tasks_from`.
 The playbook keeps the orchestration (the plan, the prompts, `serial: 1`), the
 role keeps everything that has to be correct on the host.
 
@@ -10,6 +10,8 @@ role keeps everything that has to be correct on the host.
 | `survey` | Heals a half-finished dpkg transaction, then collects the pending packages, the free space and the reboot flag, scans the host with debsecan, and builds the host's plan entry. |
 | `apt-detached` | Runs one apt/dpkg command as a transient systemd unit and follows it from the outside. |
 | `check-boot-consistency` | Asserts that `/boot` can still boot. Read-only. |
+| `kernel-state` | Compares the running kernel with the newest installed one of the same flavour. Read-only. Included by `survey`, and run again after the patch. |
+| `fix-simulate` | Simulates the targeted upgrade (`apt-get -s`) and refuses it when apt would also upgrade a kernel, a bootloader or a package another playbook owns. Read-only. |
 
 ```yaml
 - ansible.builtin.include_role:
@@ -51,6 +53,12 @@ The same tasks compare the running kernel with the newest installed kernel of
 the same flavour (`/lib/modules/*/modules.dep`; the Raspberry Pi keeps two
 flavours side by side). A difference means a reboot would run a kernel that is
 already on disk.
+
+`scan.yml` also works out the targets of the playbook's `fixes` mode:
+`patch_fix_targets` are the pending packages that carry a fix and need no
+reboot, `patch_fix_deferred` those that rewrite `/boot` (matching
+`patch_boot_packages_regex`) and `patch_fix_handover` those another playbook
+owns. `fix-simulate` then checks what apt would really upgrade.
 
 Hosts whose running kernel does not match `patch_debian_kernel_regex` (the
 Raspberry Pi `+rpt` and Armbian kernels) are flagged: debsecan matches Debian

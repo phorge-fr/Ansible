@@ -1,7 +1,7 @@
 ---
 type: explanation
 audience: maintainer who needs to know why the patch playbook is built this way
-verified: 2026-10-03
+verified: 2026-11-03
 ---
 
 # How patch management works
@@ -17,15 +17,38 @@ verified: 2026-10-03
 2. **Plan**: one consolidated report - the pending packages per host, which
    upgrades rewrite `/boot`, and any host that looks unsafe to patch. Lines
    that matter are prefixed `!!`.
-3. **One decision**: a single yes/no. A refusal ends the run there without
+3. **One decision**: `all`, `fixes` or `no`. `no` ends the run there without
    touching anything.
 4. **Then one host at a time** (`serial: 1`, `any_errors_fatal`): upgrade it,
-   prove dpkg configured every package and that `/boot` is still bootable,
-   ask whether to reboot it, and wait for it to come back healthy before
-   moving to the next host. The first failure stops the rollout.
+   prove dpkg configured every package and that `/boot` is still bootable.
+   With `all`, ask whether to reboot it and wait for it to come back healthy
+   before moving to the next host. With `fixes`, never reboot. The first
+   failure stops the rollout.
 5. **Summary**: per host - packages upgraded, still pending (held or phased
    updates stay pending legitimately), reboot required, rebooted, and the
-   kernel it came back on.
+   kernel it came back on. Then the hosts that still need a reboot, each with
+   the reason.
+
+### The `fixes` mode
+
+`fixes` upgrades only the pending packages that debsecan reports as carrying a
+fix, minus those that need a reboot, so a vulnerability can be closed without
+restarting anything. A package needs a reboot when it is on the
+`patch_boot_packages_regex` list (kernel, initramfs, firmware, bootloader).
+Packages owned by another playbook (`patch_handover_regex`) are left to it.
+
+apt may upgrade more than the named packages to satisfy dependencies, so the
+upgrade is simulated first (`apt-get -s`). If the simulation would also upgrade
+a kernel, a bootloader or a package owned by another playbook, that host is
+skipped and the reason is printed: the mode would no longer be "no reboot", and
+one host that needs a window does not block the rest of the rollout.
+
+A fix that needs a reboot is not applied. It is listed at the end with the host
+that needs the reboot, together with any host that already runs an older kernel
+than the one installed, which a reboot alone would fix. The mode does not
+restart the services that still use an upgraded library (libc6, openssl):
+those keep the old copy in memory until they restart, and listing them needs
+`needrestart`, which is not installed on the hosts.
 
 ## Why it is built this way
 

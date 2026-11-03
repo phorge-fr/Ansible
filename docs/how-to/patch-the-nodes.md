@@ -1,7 +1,7 @@
 ---
 type: how-to
 audience: maintainer patching the nodes in a planned window
-verified: 2026-11-03
+verified: 2026-11-04
 ---
 
 # Patch the nodes
@@ -18,10 +18,23 @@ hot-patches reacted to deliberately.
 ANSIBLE_CALLBACK_RESULT_FORMAT=yaml ansible-playbook -i inventories/production/hosts \
   playbooks/patch.yml --vault-password-file vault_pass --check
 
-# interactive run: one yes/no on the plan, then host by host
+# interactive run: the plan, one question, then host by host
 ANSIBLE_CALLBACK_RESULT_FORMAT=yaml ansible-playbook -i inventories/production/hosts \
   playbooks/patch.yml --vault-password-file vault_pass
 ```
+
+The question after the plan has three answers:
+
+- `all` - every pending update, host by host, with a question before each
+  reboot (`yes` still works).
+- `fixes` - only the packages that close a CVE and need no reboot. It never
+  reboots: the run ends with the hosts that need a reboot and why. Use it to
+  close a vulnerability now and leave the kernel for a planned window.
+- `no` - nothing is applied.
+
+Before the upgrade, `fixes` simulates it on each host. A host where apt would
+also upgrade a kernel, a bootloader or a package owned by another playbook is
+skipped, with the reason printed, and the others go on.
 
 Targeting and options:
 
@@ -41,8 +54,9 @@ and the summary readable (the default JSON-ish callback flattens them).
   (installed by `setup-debsecan.yml`). Under each host it lists, per package,
   the CVEs that a pending update fixes, with the version it installs, and flags
   the ones that are remotely exploitable or of high urgency. A package with a
-  fix in the archive but no pending update (held back, or needing `-e
-  patch_upgrade=dist`) is listed on a `!!` line. The scan only reads: it changes
+  fix in Debian but no pending update (held back, a vendor build such as the
+  Raspberry Pi `+rpt` one, or a fix missing from the apt sources) is listed on a
+  `!!` line. The scan only reads: it changes
   nothing on the host.
 - The `kernel:` line compares the running kernel with the newest installed one
   of the same flavour. A `!!` there means the fix is already on disk and only a

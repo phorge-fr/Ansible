@@ -10,6 +10,7 @@
 #   patch_plan_entry        the host's block of lines in the plan
 #   patch_pending           registered apt list --upgradable result
 #   patch_boot_packages     pending packages whose postinst rewrites /boot
+#   patch_scan_lines        the host's vulnerability lines (scan.yml)
 #   patch_broken_before     packages found unconfigured before this run
 
 # A host left in this state is the single most dangerous thing to run an
@@ -129,6 +130,9 @@
     path: /var/run/reboot-required
   register: patch_reboot_required
 
+- name: Scan the host for known vulnerabilities
+  ansible.builtin.include_tasks: scan.yml
+
 - name: Build this host's plan entry
   ansible.builtin.set_fact:
     patch_plan_entry: >-
@@ -143,4 +147,5 @@
          + (['  !! owned by ' ~ patch_handover_playbook ~ ', do not upgrade here: '
              ~ (patch_handover_packages | join(', '))]
             if patch_handover_packages | length > 0 else [])
+         + patch_scan_lines
          + patch_pending.stdout_lines }}

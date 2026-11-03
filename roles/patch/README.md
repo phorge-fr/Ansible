@@ -7,7 +7,7 @@ role keeps everything that has to be correct on the host.
 
 | Entry point | What it does |
 |---|---|
-| `survey` | Heals a half-finished dpkg transaction, then collects the pending packages, the free space and the reboot flag, and builds the host's plan entry. |
+| `survey` | Heals a half-finished dpkg transaction, then collects the pending packages, the free space and the reboot flag, scans the host with debsecan, and builds the host's plan entry. |
 | `apt-detached` | Runs one apt/dpkg command as a transient systemd unit and follows it from the outside. |
 | `check-boot-consistency` | Asserts that `/boot` can still boot. Read-only. |
 
@@ -36,6 +36,25 @@ keeps running on the kernel already in memory until someone reboots it.
 
 `apt-detached` removes the first link in that chain, `check-boot-consistency`
 the last.
+
+## The vulnerability scan
+
+`survey` includes `tasks/scan.yml` once the pending packages are known. It runs
+`debsecan --suite <release> --only-fixed`, with the release read from
+`/etc/os-release` because debsecan's own suite list stops at `bullseye`, and
+renders the result with `templates/scan-lines.j2` as the lines of the plan
+entry. A CVE counts as fixable now when the package that carries the fix is in
+the pending list; the others are reported as fixed in the archive but not
+pending. The scan only reads: debsecan changes no package.
+
+The same tasks compare the running kernel with the newest installed kernel of
+the same flavour (`/lib/modules/*/modules.dep`; the Raspberry Pi keeps two
+flavours side by side). A difference means a reboot would run a kernel that is
+already on disk.
+
+Hosts whose running kernel does not match `patch_debian_kernel_regex` (the
+Raspberry Pi `+rpt` and Armbian kernels) are flagged: debsecan matches Debian
+source packages and cannot judge them.
 
 ## `apt-detached`
 
@@ -91,6 +110,7 @@ a reboot when it is not empty.
 | `patch_detached_timeout` | `3600` | Seconds to follow a detached run before leaving it to systemd. |
 | `patch_min_boot_free_mb` | `80` | Free space in `/boot` below which a kernel upgrade is flagged in the plan. |
 | `patch_boot_packages_regex` | `linux-image`, `initramfs-tools`, `armbian-bsp`, `u-boot`, ... | Matches the pending packages whose postinst rewrites `/boot`. |
+| `patch_debian_kernel_regex` | `\+deb[0-9]` | Running kernels that match come from the Debian archive; the others are flagged as not judged by debsecan. |
 | `patch_detached_name` | - | Required by `apt-detached`: unit, script and log suffix. |
 | `patch_detached_command` | - | Required by `apt-detached`: the command to run. |
 

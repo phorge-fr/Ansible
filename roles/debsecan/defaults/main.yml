@@ -1,0 +1,3 @@
+---
+# The Debian package that provides the debsecan command.
+debsecan_package: debsecan

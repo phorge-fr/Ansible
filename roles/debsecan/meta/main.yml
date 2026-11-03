@@ -1,0 +1,14 @@
+---
+dependencies: []
+
+galaxy_info:
+  role_name: debsecan
+  author: l-nmch
+  description: Install debsecan, the Debian security tracker client
+  company: "Phorge"
+  license: "license (BSD, MIT)"
+  min_ansible_version: 2.17.13
+  platforms:
+    - name: Debian
+      versions:
+        - all

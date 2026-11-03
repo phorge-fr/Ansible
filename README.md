@@ -32,6 +32,7 @@ docs/                     # how-to, reference, explanation and decisions (docs/R
 | `all` | every host | `setup-alloy.yml` | `grafana.grafana.alloy` |
 | `all` | every host | `setup-hardening.yml` | `ssh_hardening` |
 | `all` | every host | `setup-firewall.yml` (one node at a time, `enforce` on `control`, `core`, `svc` and `storage`, `audit` elsewhere) | `firewall` |
+| `all` | every host | `setup-debsecan.yml` (installs debsecan, no daily report job) | `debsecan` |
 | `all` | every host | `setup-timesync.yml` (checks clock drift and fixes it in the same run) | - |
 | `all` | every host | `patch.yml` (interactive, one host at a time: asks before upgrading and before rebooting each host) | `patch` |
 | `core` | k0s `core` nodes | `setup-longhorn-nodes.yml` (Longhorn node prerequisites: packages and `dm_crypt`) | - |
@@ -70,6 +71,7 @@ Project roles, each documented in its own `README.md`:
 - [ssh_hardening](roles/ssh_hardening/README.md)
 - [firewall](roles/firewall/README.md)
 - [kernel_cmdline](roles/kernel_cmdline/README.md)
+- [debsecan](roles/debsecan/README.md)
 - [patch](roles/patch/README.md)
 
 No playbook applies anything to the `hpc` group. `setup-hpc.yml` used to apply `docker`, `rocm_drivers`, `nvidia_drivers` and `nvidia_container_toolkit` to every host of the group at once, which was wrong for `ai-rpi5-01` - a Pi has no discrete GPU and needs neither the ROCm nor the NVIDIA stack. The roles are kept, and so is `hpc_servers` (monitoring and LLM inference stack), ready for a playbook that targets `hpc-gpu` and `hpc-npu` separately.

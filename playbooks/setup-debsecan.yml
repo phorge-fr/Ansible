@@ -1,0 +1,6 @@
+---
+- name: Install debsecan, the Debian vulnerability scanner, on every host
+  hosts: all
+  become: true
+  roles:
+    - debsecan

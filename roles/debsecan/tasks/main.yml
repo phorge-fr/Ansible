@@ -1,0 +1,29 @@
+---
+# The package asks "send daily reports?" with a default of yes, and a
+# non-interactive install takes that default: it writes /etc/cron.d/debsecan,
+# a daily job that mails root. Phorge runs nothing on a timer on its hosts
+# (docs/decisions/0001-manual-os-updates.md), so the answer is recorded as
+# "no" before the package is installed.
+- name: Record that debsecan must not send daily reports
+  ansible.builtin.debconf:
+    name: debsecan
+    question: debsecan/report
+    vtype: boolean
+    value: "false"
+
+# Recommends are a cron daemon and a mail transport agent, neither of which
+# debsecan needs to be run by hand.
+- name: Install debsecan
+  ansible.builtin.apt:
+    name: "{{ debsecan_package }}"
+    state: present
+    install_recommends: false
+    update_cache: true
+    cache_valid_time: 3600
+
+# Only matters for a host where debsecan was installed by hand with the
+# default answer: the answer above does not remove an existing job.
+- name: Make sure no debsecan cron job exists
+  ansible.builtin.file:
+    path: /etc/cron.d/debsecan
+    state: absent

@@ -1,7 +1,7 @@
 ---
 type: how-to
 audience: maintainer patching the nodes in a planned window
-verified: 2026-11-04
+verified: 2026-11-03
 ---
 
 # Patch the nodes

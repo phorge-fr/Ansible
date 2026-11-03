@@ -1,7 +1,7 @@
 ---
 type: explanation
 audience: maintainer who needs to know why the patch playbook is built this way
-verified: 2026-11-04
+verified: 2026-11-03
 ---
 
 # How patch management works

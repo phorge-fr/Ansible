@@ -6,7 +6,8 @@ argument_specs:
     short_description: Heal a half-finished dpkg transaction, then collect what the plan needs
     description:
       - Finishes any dpkg transaction a previous run left unconfigured, then
-        reads the pending packages, the free space and the reboot flag.
+        reads the pending packages, the free space and the reboot flag, and
+        scans the host with debsecan for vulnerabilities that have a fix.
       - Refuses the host if it is still in a broken state after healing.
       - Safe to run on every host in parallel.
     options:
@@ -21,6 +22,9 @@ argument_specs:
       patch_boot_packages_regex:
         type: str
         description: Matches the pending packages whose postinst rewrites /boot.
+      patch_debian_kernel_regex:
+        type: str
+        description: Matches the running kernels that come from the Debian archive, the only ones debsecan can judge.
 
   apt-detached:
     short_description: Run one apt or dpkg command as a transient systemd unit

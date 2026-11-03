@@ -1,0 +1,32 @@
+{#- Vulnerability lines of one host's plan entry. Inputs: patch_pending,
+    patch_debsecan, patch_scan, patch_kernel_running, patch_kernel_newest. -#}
+{% set pending = dict(patch_pending.stdout_lines | map('split', ' ') | list) %}
+{% if patch_debsecan.rc != 0 %}
+  !! debsecan is not installed, no vulnerability data: run playbooks/setup-debsecan.yml
+{% elif patch_scan.stdout.startswith('ERROR|') %}
+  !! debsecan failed: {{ patch_scan.stdout.split('|', 1)[1] }}
+{% else %}
+{% set rows = patch_scan.stdout_lines | map('split', '|') | list %}
+{% set fixable = rows | selectattr(0, 'in', pending) | list %}
+{% set stuck = rows | rejectattr(0, 'in', pending) | list %}
+{% if rows | length == 0 %}
+  vulnerabilities: none with a fix in the archive
+{% endif %}
+{% if fixable | length > 0 %}
+  vulnerabilities fixed by a pending update: {{ fixable | map(attribute=1) | map('int') | sum }} CVE(s) in {{ fixable | length }} package(s)
+{% for r in fixable %}
+    {{ r[0] }} -> {{ pending[r[0]] }}: {{ r[1] }} CVE(s){{ ' - REMOTELY EXPLOITABLE' if r[2] == '1' else '' }}{{ ' - high urgency' if r[3] == '1' else '' }} ({{ r[4] }}{{ ', ...' if r[1] | int > 3 else '' }})
+{% endfor %}
+{% endif %}
+{% if stuck | length > 0 %}
+  !! fixed in the archive but no pending update (held back, or needs dist-upgrade): {{ stuck | map(attribute=0) | join(', ') }}
+{% endif %}
+{% endif %}
+{% if patch_kernel_newest != patch_kernel_running %}
+  !! kernel: running {{ patch_kernel_running }}, {{ patch_kernel_newest }} is already installed, a reboot would run it
+{% else %}
+  kernel: running {{ patch_kernel_running }}, the newest installed
+{% endif %}
+{% if not (patch_kernel_running is search(patch_debian_kernel_regex)) %}
+  !! this kernel does not come from the Debian archive, debsecan cannot judge it: check the vendor advisories
+{% endif %}

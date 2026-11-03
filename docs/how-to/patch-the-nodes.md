@@ -1,7 +1,7 @@
 ---
 type: how-to
 audience: maintainer patching the nodes in a planned window
-verified: 2026-10-03
+verified: 2026-11-03
 ---
 
 # Patch the nodes
@@ -37,6 +37,22 @@ and the summary readable (the default JSON-ish callback flattens them).
 
 ## Notes
 
+- The plan also scans every host with [debsecan](../../roles/debsecan/README.md)
+  (installed by `setup-debsecan.yml`). Under each host it lists, per package,
+  the CVEs that a pending update fixes, with the version it installs, and flags
+  the ones that are remotely exploitable or of high urgency. A package with a
+  fix in the archive but no pending update (held back, or needing `-e
+  patch_upgrade=dist`) is listed on a `!!` line. The scan only reads: it changes
+  nothing on the host.
+- The `kernel:` line compares the running kernel with the newest installed one
+  of the same flavour. A `!!` there means the fix is already on disk and only a
+  reboot is missing, which debsecan alone cannot see because it reads the
+  installed packages, not the running kernel.
+- The Raspberry Pi (`+rpt`) and Armbian kernels do not come from the Debian
+  archive: the plan says debsecan cannot judge them, so check them against
+  their own vendor's advisories.
+- A host without debsecan, or where the scan fails, says so on a `!!` line and
+  is still patchable.
 - `--check` is the safe preview: the pauses are skipped in check mode, so the
   plan is shown and nothing is ever applied or rebooted.
 - The plan's reboot column shows the flag *before* the upgrade (it reports the

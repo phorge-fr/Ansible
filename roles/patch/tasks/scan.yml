@@ -1,0 +1,72 @@
+---
+# Scan one host with debsecan and turn the result into the vulnerability lines
+# of its plan entry. Read-only: debsecan only reads the package database and
+# downloads the Debian security tracker data, it changes no package.
+#
+# Included by survey.yml once the pending packages are known, because a CVE is
+# only "fixable now" when the package carrying the fix is in that list.
+#
+# Output:
+#   patch_scan_lines   the lines appended to the host's plan entry
+
+- name: Look for debsecan
+  ansible.builtin.shell: command -v debsecan
+  args:
+    executable: /bin/bash
+  register: patch_debsecan
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+# debsecan only knows suites up to bullseye by name, so the suite is passed
+# explicitly. The newest kernel is looked for among the installed modules of
+# the running flavour: a Raspberry Pi keeps two flavours side by side
+# (rpi-v8 and rpi-2712) and only the running one is comparable.
+- name: Read the release, the running kernel and the newest installed one
+  ansible.builtin.shell: |
+    set -o pipefail
+    . /etc/os-release
+    running=$(uname -r)
+    flavour=${running##*-}
+    newest=$(find /lib/modules -mindepth 2 -maxdepth 2 -name modules.dep -printf '%h\n' \
+      | xargs -rn1 basename | grep -- "-${flavour}$" | sort -V | tail -1)
+    printf '%s|%s|%s\n' "$VERSION_CODENAME" "$running" "${newest:-$running}"
+  args:
+    executable: /bin/bash
+  register: patch_scan_env
+  changed_when: false
+  check_mode: false
+
+- name: Record the release and the kernels
+  ansible.builtin.set_fact:
+    patch_scan_suite: "{{ patch_scan_env.stdout.split('|')[0] }}"
+    patch_kernel_running: "{{ patch_scan_env.stdout.split('|')[1] }}"
+    patch_kernel_newest: "{{ patch_scan_env.stdout.split('|')[2] }}"
+
+# One line per package: name|CVE count|remotely exploitable|high urgency|first
+# CVE ids. A failure is reported as "ERROR|reason" rather than as an empty
+# list, which would read as "nothing to fix".
+- name: Run debsecan on the fixed vulnerabilities
+  ansible.builtin.shell: |
+    set -o pipefail
+    out=$(LC_ALL=C debsecan --suite {{ patch_scan_suite }} --only-fixed 2>&1) \
+      || { echo "ERROR|$(printf '%s' "$out" | head -n 1)"; exit 0; }
+    printf '%s\n' "$out" | awk '
+      $1 ~ /^(CVE|TEMP)-/ {
+        n[$2]++
+        if ($0 ~ /remotely exploitable/) r[$2] = 1
+        if ($0 ~ /high urgency/) h[$2] = 1
+        if (n[$2] <= 3) c[$2] = (c[$2] == "" ? $1 : c[$2] ", " $1)
+      }
+      END { for (p in n) printf "%s|%d|%d|%d|%s\n", p, n[p], r[p] + 0, h[p] + 0, c[p] }
+    ' | sort
+  args:
+    executable: /bin/bash
+  register: patch_scan
+  changed_when: false
+  check_mode: false
+  when: patch_debsecan.rc == 0
+
+- name: Build the vulnerability lines of the plan entry
+  ansible.builtin.set_fact:
+    patch_scan_lines: "{{ lookup('ansible.builtin.template', 'scan-lines.j2').splitlines() }}"

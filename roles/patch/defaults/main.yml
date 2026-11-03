@@ -22,3 +22,8 @@ patch_boot_packages_regex: '^(linux-image|linux-headers|linux-base|initramfs-too
 # run would block the cluster between nodes.
 patch_handover_regex: ""
 patch_handover_playbook: ""
+
+# A running kernel that matches this comes from the Debian archive, so debsecan
+# can tell whether it is vulnerable. The Raspberry Pi (+rpt) and Armbian
+# kernels do not match, and the plan says debsecan cannot judge them.
+patch_debian_kernel_regex: '\+deb[0-9]'

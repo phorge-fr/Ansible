@@ -3,8 +3,9 @@
 #   1. heal any dpkg transaction a previous run left half-finished, then check
 #      every targeted host for pending updates, free space and the
 #      reboot-required flag;
-#   2. show ONE plan: the pending packages per host, which upgrades touch the
-#      kernel or the initramfs, and any host that looks unsafe to patch;
+#   2. show ONE plan: the pending packages per host, the CVEs they fix
+#      (debsecan), which upgrades touch the kernel or the initramfs, and any
+#      host that looks unsafe to patch;
 #   3. ask ONE yes/no - "no" ends the run there without touching anything;
 #   4. then, ONE HOST AT A TIME: upgrade it, prove dpkg finished and /boot is
 #      still bootable, ask whether to reboot it, and wait for it to come back

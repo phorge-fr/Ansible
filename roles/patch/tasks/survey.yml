@@ -12,6 +12,7 @@
 #   patch_boot_packages     pending packages whose postinst rewrites /boot
 #   patch_scan_lines        the host's vulnerability lines (scan.yml)
 #   patch_broken_before     packages found unconfigured before this run
+#   patch_held_heal         service restarts the healing held back (never done)
 
 # A host left in this state is the single most dangerous thing to run an
 # upgrade against: apt would refuse or, worse, pile a second transaction
@@ -67,6 +68,16 @@
       hand before patching - see /var/log/phorge-patch-configure.log.
     quiet: true
   when: patch_broken_before.stdout_lines | length > 0 and not ansible_check_mode
+
+- name: Read the service restarts the healing held back
+  ansible.builtin.include_tasks: held-restarts.yml
+  vars:
+    patch_held_name: configure
+  when: patch_broken_before.stdout_lines | length > 0 and not ansible_check_mode
+
+- name: Record the restarts held back by the healing
+  ansible.builtin.set_fact:
+    patch_held_heal: "{{ (patch_held_services | default([])) if (patch_broken_before.stdout_lines | length > 0 and not ansible_check_mode) else [] }}"
 
 # Regenerating an initramfs needs room in /boot, and a kernel upgrade that
 # runs out of space mid-way is exactly how a half-written initrd happens.
@@ -144,6 +155,7 @@
             if (patch_boot_packages | length > 0 and (patch_free['/boot'] | default('9999') | int) < patch_min_boot_free_mb) else [])
          + (['  !! healed ' ~ (patch_broken_before.stdout_lines | length) ~ ' package(s) left broken by an earlier run']
             if patch_broken_before.stdout_lines | length > 0 else [])
+         + (['  !! the healing held back the restart of: ' ~ (patch_held_heal | join(', '))] if patch_held_heal | length > 0 else [])
          + (['  !! owned by ' ~ patch_handover_playbook ~ ', do not upgrade here: '
              ~ (patch_handover_packages | join(', '))]
             if patch_handover_packages | length > 0 else [])

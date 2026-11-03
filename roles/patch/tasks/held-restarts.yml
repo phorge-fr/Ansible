@@ -1,0 +1,23 @@
+---
+# Read the service restarts that apt-detached held back during one run.
+# Read-only. The policy-rc.d installed by the wrapper refuses start, stop and
+# restart and records "<service> <action>"; a service that was asked to be
+# restarted (or started) is still running its old code, or not running at all.
+#
+# Input:   patch_held_name       the run to read: upgrade, fixes or configure
+# Output:  patch_held_services   services whose restart or start was held back
+- name: Read the held-back restarts of the run
+  ansible.builtin.shell: |
+    set -o pipefail
+    f="/var/log/phorge-patch-{{ patch_held_name }}.denied"
+    [ -f "$f" ] && awk '$2 ~ /^(restart|try-restart|start)$/ {print $1}' "$f" | sort -u
+    exit 0
+  args:
+    executable: /bin/bash
+  register: patch_held
+  changed_when: false
+  check_mode: false
+
+- name: Record the services whose restart was held back
+  ansible.builtin.set_fact:
+    patch_held_services: "{{ patch_held.stdout_lines }}"

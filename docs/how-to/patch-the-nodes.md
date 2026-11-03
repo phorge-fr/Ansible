@@ -32,6 +32,12 @@ The question after the plan has three answers:
   close a vulnerability now and leave the kernel for a planned window.
 - `no` - nothing is applied.
 
+Whichever you answer, no service is restarted by the upgrade. After each
+host, the playbook lists the services whose restart was held back and asks
+whether to restart them now (default: no). A `reload` is not held back. What
+you leave is listed at the end as `RESTART NEEDED on <host>`, next to the
+`REBOOT NEEDED` list.
+
 Before the upgrade, `fixes` simulates it on each host. A host where apt would
 also upgrade a kernel, a bootloader or a package owned by another playbook is
 skipped, with the reason printed, and the others go on.

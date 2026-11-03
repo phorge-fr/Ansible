@@ -51,8 +51,41 @@
       #!/bin/bash
       # Managed by Ansible (patch role, apt-detached), overwritten.
       export DEBIAN_FRONTEND=noninteractive
-      {{ patch_detached_command }} > /var/log/phorge-patch-{{ patch_detached_name }}.log 2>&1
-      echo $? > /var/log/phorge-patch-{{ patch_detached_name }}.status
+      log=/var/log/phorge-patch-{{ patch_detached_name }}.log
+      status=/var/log/phorge-patch-{{ patch_detached_name }}.status
+      denied=/var/log/phorge-patch-{{ patch_detached_name }}.denied
+      policy=/usr/sbin/policy-rc.d
+
+      # No maintainer script may start, stop or restart a service while this
+      # runs: invoke-rc.d and deb-systemd-invoke ask policy-rc.d first, and it
+      # refuses with 101 and records the service. A reload goes through. The
+      # playbook then lists what was held back and asks before restarting it.
+      # A policy-rc.d that is not ours is never overwritten; one of ours left
+      # by a run that was killed is replaced.
+      if [ -e "$policy" ] && ! grep -q '^# phorge-patch policy' "$policy"; then
+        echo "refusing to run: $policy already exists and is not managed by this role" > "$log"
+        echo 125 > "$status"
+        exit 0
+      fi
+      : > "$denied"
+      cat > "$policy" <<'POLICY'
+      #!/bin/sh
+      # phorge-patch policy: no service restart without the maintainer.
+      case "$2" in
+        reload|force-reload|status) exit 0 ;;
+      esac
+      echo "$1 $2" >> {{ '/var/log/phorge-patch-' ~ patch_detached_name ~ '.denied' }}
+      exit 101
+      POLICY
+      chmod 0755 "$policy"
+      # The explicit removal below is the normal path; the trap only covers a
+      # run that is terminated, so the policy can not outlive it.
+      trap 'rm -f "$policy"' EXIT
+
+      {{ patch_detached_command }} > "$log" 2>&1
+      rc=$?
+      rm -f "$policy"
+      echo $rc > "$status"
   when: patch_detached_active.status.ActiveState not in ['active', 'activating']
 
 - name: "Run it detached, and follow it: {{ patch_detached_name }}"

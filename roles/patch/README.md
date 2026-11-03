@@ -11,6 +11,7 @@ role keeps everything that has to be correct on the host.
 | `apt-detached` | Runs one apt/dpkg command as a transient systemd unit and follows it from the outside. |
 | `check-boot-consistency` | Asserts that `/boot` can still boot. Read-only. |
 | `kernel-state` | Compares the running kernel with the newest installed one of the same flavour. Read-only. Included by `survey`, and run again after the patch. |
+| `held-restarts` | Reads the service restarts that `apt-detached` held back during a run. Read-only. |
 | `fix-simulate` | Simulates the targeted upgrade (`apt-get -s`) and refuses it when apt would also upgrade a kernel, a bootloader or a package another playbook owns. Read-only. |
 
 ```yaml
@@ -72,6 +73,16 @@ connection, an Ansible timeout and a Ctrl-C: only the *watching* dies, never
 dpkg. The wrapper records apt's exit status in
 `/var/log/phorge-patch-<name>.status` as its last action, and that file
 appearing is the completion marker.
+
+While the command runs, a `policy-rc.d` is installed that refuses `start`,
+`stop` and `restart` (exit 101) and lets `reload`, `force-reload` and `status`
+through. Every refusal is appended to
+`/var/log/phorge-patch-<name>.denied`, which `held-restarts` reads. The
+wrapper removes the policy itself before it writes the status file, with a
+trap for a run that is terminated. A `policy-rc.d` that does not carry the
+role's marker is never overwritten: the run refuses with status `125`. A
+maintainer script that calls `systemctl restart` directly does not ask the
+policy and is not covered.
 
 An in-progress run is **resumed, not restarted**: the unit is checked for
 first, and while one is live neither the script nor the unit is touched.

@@ -13,6 +13,10 @@
 #      still bootable, and - in "all" mode only - ask whether to reboot it and
 #      wait for it to come back healthy before moving to the next host. The
 #      "fixes" mode never reboots: the run ends with the hosts that need one.
+# No service is started, stopped or restarted by the packages being upgraded:
+# a policy-rc.d (patch role, apt-detached) refuses it while apt runs and
+# records it, a reload is allowed, and the host's held-back restarts are
+# listed and restarted only if the maintainer answers yes.
 # It sets up no automatic update mechanism of any kind - patching stays a
 # manual action run when a maintenance window is planned.
 #
@@ -78,6 +82,7 @@
             fixes  only the packages that close a CVE and need no reboot;
                    never reboots, and lists the hosts that need one at the end
             no     nothing
+          No service is restarted without a further answer of yours.
           [all/fixes/no]
       register: patch_decision
       run_once: true
@@ -252,6 +257,47 @@
         quiet: true
       when: not ansible_check_mode and (patch_apply | default(false) | bool)
 
+    # The packages were not allowed to restart anything. Which services asked
+    # is listed, and nothing is restarted before the maintainer says yes: a
+    # restart can interrupt production (Incus, Ceph, NFS, the k0s workloads).
+    - name: Read the service restarts that were held back
+      ansible.builtin.include_role:
+        name: patch
+        tasks_from: held-restarts
+      vars:
+        patch_held_name: "{{ 'fixes' if (patch_mode | default('none')) == 'fixes' else 'upgrade' }}"
+      when: patch_upgrade_ran | default(false) | bool
+
+    - name: Ask whether to restart the held-back services
+      ansible.builtin.pause:
+        prompt: |-
+          {{ inventory_hostname }}: the upgrade asked to restart these services and was not allowed to:
+            {{ patch_held_services | join(', ') }}
+          They keep running the code they had before the upgrade (or are not running).
+          Restart them now, one at a time? [yes/no]
+      register: patch_restart_answer
+      when: >-
+        not ansible_check_mode and (patch_upgrade_ran | default(false) | bool)
+        and patch_held_services | length > 0
+
+    - name: Restart the held-back services
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: restarted
+      loop: "{{ patch_held_services }}"
+      when: >-
+        not ansible_check_mode and (patch_upgrade_ran | default(false) | bool)
+        and patch_held_services | length > 0
+        and (patch_restart_answer.user_input | default('') | trim | lower) in ['yes', 'y', 'oui']
+
+    - name: Record the services still running their old code
+      ansible.builtin.set_fact:
+        patch_restart_pending: >-
+          {{ (patch_held_services | default([]))
+             if ((patch_upgrade_ran | default(false) | bool)
+                 and (patch_restart_answer.user_input | default('') | trim | lower) not in ['yes', 'y', 'oui'])
+             else [] }}
+
     - name: List what is still upgradable after the upgrade
       ansible.builtin.shell: |
         set -o pipefail
@@ -383,12 +429,24 @@
         label: "{{ item.key }}"
       run_once: true
 
-    - name: Say that no host needs a reboot  # noqa: run-once[task]
+    - name: Tell which hosts still have services on their old code  # noqa: run-once[task]
       ansible.builtin.debug:
-        msg: No host needs a reboot.
+        msg: "RESTART NEEDED on {{ item.key }} (not restarted, still on the old code): {{ item.value.patch_restart_pending | join(', ') }}"
+      loop: >-
+        {{ hostvars | dict2items | selectattr('value.patch_restart_pending', 'defined')
+           | rejectattr('value.patch_restart_pending', 'equalto', []) | list }}
+      loop_control:
+        label: "{{ item.key }}"
+      run_once: true
+
+    - name: Say that nothing is left to reboot or restart  # noqa: run-once[task]
+      ansible.builtin.debug:
+        msg: No host needs a reboot or a service restart.
       run_once: true
       when: >-
         not ansible_check_mode
         and (hostvars | dict2items | selectattr('value.patch_reboot_reasons', 'defined')
              | rejectattr('value.patch_reboot_reasons', 'equalto', []) | list | length) == 0
+        and (hostvars | dict2items | selectattr('value.patch_restart_pending', 'defined')
+             | rejectattr('value.patch_restart_pending', 'equalto', []) | list | length) == 0
         and (hostvars | dict2items | selectattr('value.patch_reboot_reasons', 'defined') | list | length) > 0

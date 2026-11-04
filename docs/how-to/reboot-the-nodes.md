@@ -72,13 +72,13 @@ Use this for `core` and `control`. Each node is control plane and worker at once
    kubectl --context <cluster> drain <node> --ignore-daemonsets --delete-emptydir-data --timeout=2m
    ```
 
-4. If the drain stops on `csi-attacher` or `csi-provisioner` in `longhorn-system` with `Cannot evict pod as it would violate the pod's disruption budget`, delete that one pod, then run the drain again:
+4. On a cluster that runs Longhorn, the drain stops on `csi-attacher` or `csi-provisioner` in `longhorn-system` with `Cannot evict pod as it would violate the pod's disruption budget`. Delete that one pod, then run the drain again:
 
    ```bash
    kubectl --context <cluster> -n longhorn-system delete pod <csi-pod>
    ```
 
-   Only these two controllers get this treatment. If another pod blocks the drain, stop and find out why. The Longhorn `instance-manager` budgets release by themselves once the node is cordoned. [Why the CSI pods block](../explanation/rolling-reboots.md#why-a-drain-blocks-on-the-csi-pods) explains the exception.
+   Only these two controllers get this treatment. If another pod blocks the drain, stop and find out why. The Longhorn `instance-manager` budgets release by themselves once the node is cordoned. [Why the CSI pods block](../explanation/rolling-reboots.md#why-a-drain-blocks-on-the-csi-pods) explains why this step is expected.
 
 5. Wait until the evicted pods run elsewhere, and until Flux is ready again. Do not reboot while a pod is still starting:
 

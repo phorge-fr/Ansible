@@ -75,3 +75,14 @@ argument_specs:
       patch_boot_packages_regex:
         type: str
         description: Matches the packages whose postinst rewrites /boot.
+
+  held-restarts:
+    short_description: Read the service restarts that a detached run held back
+    description:
+      - Reads /var/log/phorge-patch-<name>.denied, written by the policy-rc.d
+        that apt-detached installs, and sets patch_held_services. Read-only.
+    options:
+      patch_held_name:
+        type: str
+        required: true
+        description: The run to read, the patch_detached_name it was started with.

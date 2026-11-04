@@ -45,10 +45,31 @@ one host that needs a window does not block the rest of the rollout.
 
 A fix that needs a reboot is not applied. It is listed at the end with the host
 that needs the reboot, together with any host that already runs an older kernel
-than the one installed, which a reboot alone would fix. The mode does not
-restart the services that still use an upgraded library (libc6, openssl):
-those keep the old copy in memory until they restart, and listing them needs
-`needrestart`, which is not installed on the hosts.
+than the one installed, which a reboot alone would fix.
+
+### No service restarts without the maintainer
+
+Neither mode restarts a service on its own. dpkg does restart services: the
+maintainer script of an upgraded package calls `invoke-rc.d` or
+`deb-systemd-invoke`, and the `libc6` postinst restarts the services that use
+it. On a node that serves others that is an interruption nobody agreed to.
+
+While `apt-detached` runs apt or dpkg, a `policy-rc.d` is in place. Both
+commands ask it before acting, and it refuses `start`, `stop` and `restart`
+with exit status 101 and records the service, while `reload` goes through. The
+wrapper script installs it and removes it itself, with a trap, so a dropped
+connection cannot leave it behind; a `policy-rc.d` that is not ours is never
+overwritten and the host is refused.
+
+After the upgrade each host lists the services whose restart was held back and
+asks whether to restart them now, one at a time. Answering no leaves them on
+their old code and puts them in the final `RESTART NEEDED` list. The same
+policy covers the `dpkg --configure -a` that heals an interrupted transaction
+before the plan; what it held back appears on the host's plan entry.
+
+The limit: a maintainer script that calls `systemctl restart` directly does not
+ask `policy-rc.d`. Debian packages use `invoke-rc.d` or `deb-systemd-invoke`
+for this, but the guarantee is that of the mechanism, not of every package.
 
 ## Why it is built this way
 

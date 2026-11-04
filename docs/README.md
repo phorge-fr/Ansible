@@ -7,6 +7,7 @@ Pages are grouped by what the reader wants, following [the organization's docume
 | Page | Task |
 | --- | --- |
 | [Patch the nodes](how-to/patch-the-nodes.md) | Apply OS updates in a planned window |
+| [Reboot the nodes](how-to/reboot-the-nodes.md) | Reboot the cluster nodes one at a time after a patch window |
 | [Deploy the Incus cluster](how-to/deploy-the-incus-cluster.md) | Bootstrap, roll back, or recover the Incus cluster |
 | [Change the north-south range](how-to/change-the-north-south-range.md) | Change the address range of a running cluster |
 | [Check the md0 array](how-to/check-the-md0-array.md) | Verify the storage node RAID integrity |
@@ -22,6 +23,7 @@ Pages are grouped by what the reader wants, following [the organization's docume
 | Page | Question it answers |
 | --- | --- |
 | [How patch management works](explanation/patch-management-design.md) | Why the patch playbook is built this way |
+| [Why the nodes are rebooted one at a time](explanation/rolling-reboots.md) | Why the reboot procedure has the steps and exceptions it has |
 | [Incus deployment caveats](explanation/incus-deployment-caveats.md) | Limits of the bootstrap and the upstream bugs worked around |
 | [The storage node NVMe dropout](explanation/storage-node-nvme-dropout.md) | What happened to the array and what not to do |
 

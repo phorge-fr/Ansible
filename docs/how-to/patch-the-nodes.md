@@ -103,5 +103,6 @@ and the summary readable (the default JSON-ish callback flattens them).
 
 ## Related
 
+- [Reboot the nodes](reboot-the-nodes.md): what to do for the hosts that end the run with `REBOOT NEEDED`
 - [How patch management works](../explanation/patch-management-design.md)
 - [Decision: OS updates are manual](../decisions/0001-manual-os-updates.md)

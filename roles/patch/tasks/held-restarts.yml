@@ -10,7 +10,14 @@
   ansible.builtin.shell: |
     set -o pipefail
     f="/var/log/phorge-patch-{{ patch_held_name }}.denied"
-    [ -f "$f" ] && awk '$2 ~ /^(restart|try-restart|start)$/ {print $1}' "$f" | sort -u
+    # invoke-rc.d records "cron restart" and deb-systemd-invoke "cron.service
+    # restart" for the same service: the suffix is dropped so it is asked once.
+    [ -f "$f" ] && awk '
+      $2 ~ /^(restart|try-restart|start)$/ {
+        sub(/\.service$/, "", $1)
+        print $1
+      }
+    ' "$f" | sort -u
     exit 0
   args:
     executable: /bin/bash

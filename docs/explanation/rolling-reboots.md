@@ -26,13 +26,11 @@ Rebooting a second member before the first is back and healthy removes the margi
 
 ## Why a drain blocks on the CSI pods
 
-`kubectl drain` evicts pods through the Kubernetes eviction API, which honours PodDisruptionBudgets. Longhorn gives `csi-attacher` and `csi-provisioner` a budget with `minAvailable: 1`. Hangar runs each CSI controller as one replica (`csi.*ReplicaCount: 1` in `base/controllers/longhorn/longhorn.yml`), so the budget allows no disruption and an eviction of the pod on the drained node is refused for ever. The drain waits until its timeout.
+`kubectl drain` evicts pods through the Kubernetes eviction API, which honours PodDisruptionBudgets. Longhorn gives `csi-attacher` and `csi-provisioner` a budget with `minAvailable: 1`. Hangar runs each CSI controller as one replica (`csi.*ReplicaCount: 1` in `base/controllers/longhorn/longhorn.yml`), on purpose: more replicas would cost resources on every host. With one replica the budget allows no disruption, so an eviction of the pod on the drained node is refused for ever and the drain waits until its timeout.
 
-Deleting the pod directly does not go through the eviction API, so the budget does not apply. That is safe for a specific reason: these controllers hold no state, and they came back on another node within about 20 seconds. Volume attach and detach operations wait during that gap; every volume attached normally afterwards. It is an exception for these two pods, and the how-to says so. Any other pod that blocks a drain is a signal to stop, not to delete.
+Deleting the pod directly does not go through the eviction API, so the budget does not apply. That is safe for a specific reason: these controllers hold no state, and they came back on another node within about 20 seconds. Volume attach and detach operations wait during that gap; every volume attached normally afterwards. This is the expected step on a cluster that runs Longhorn, and it applies to these two pods only. Any other pod that blocks a drain is a signal to stop, not to delete.
 
 The Longhorn `instance-manager` budgets behave differently. They block the first eviction attempt and release by themselves once the node is cordoned and each volume has another healthy replica.
-
-Fixing the cause means running those controllers on more than one replica. That is a Hangar change, tracked in [phorge-fr/Hangar#334](https://github.com/phorge-fr/Hangar/issues/334); when it lands, the special case disappears from the how-to.
 
 Pods that hold a volume and run as a single replica are unavailable while they move, typically one to two minutes. The drain cannot avoid that, and the how-to waits for them before the reboot, so a node is never taken down while a pod is half-way to its new home. The same wait covers the Flux controllers: they restart on another node, and a resource can report a missing artifact until the source controller is back.
 

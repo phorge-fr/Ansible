@@ -1,0 +1,62 @@
+# Authorization of the restricted TLS client certificates of the cluster.
+# Rendered by playbooks/configure-compute.yml and loaded as authorization.scriptlet;
+# authorization.client.tls-restricted=scriptlet routes this class of client to it.
+# OIDC clients (OpenFGA) and unrestricted certificates are not routed here.
+#
+# One certificate is known: the provider-incus of Crossplane (fingerprint below).
+# It may create projects, and use the objects of the projects named "t-*" (the
+# tenants) with the rights below, and nothing else. Any other restricted certificate
+# is refused. The rights are the ones measured while the end-to-end tests of Hangar
+# (tests/e2e) ran: an object kind gets only the entitlements it was seen to need.
+#
+# The rule is static on purpose: no tuple, in OpenFGA or elsewhere, can give this
+# certificate more.
+
+CROSSPLANE = "{{ incus_crossplane_client_fingerprint }}"
+TENANT_PREFIX = "t-"
+
+SERVER_ENTITLEMENTS = ["can_view", "can_create_projects"]
+
+# What the provider needs on the objects of a tenant project, by kind. The name of an object is
+# "<project>/<object>" and the name of a project is the project, so the prefix test below is on the project.
+TENANT_RIGHTS = {
+    "project": [
+        "can_view",
+        "can_edit",
+        "can_create_images",
+        "can_create_instances",
+        "can_create_networks",
+        "can_create_profiles",
+        "can_view_events",
+        "can_view_operations",
+    ],
+    "profile": ["can_view", "can_edit"],
+    "instance": ["can_view", "can_edit", "can_update_state"],
+    "network": ["can_view", "can_edit"],
+    "image": ["can_view", "can_edit"],
+    "image_alias": ["can_view"],
+}
+
+# The provider asks for these server rights every few seconds and is refused on purpose (the first one would
+# expose the secrets of the server configuration). They are not logged, or the log would fill with them.
+EXPECTED_REFUSALS = ["can_view_sensitive", "can_view_privileged_events", "can_view_resources"]
+
+def authorize(details, object, entitlement):
+    # Only the certificate of Crossplane's provider, identified by its fingerprint (what Incus sets as the user
+    # of a TLS client). Every other restricted certificate is refused.
+    if details.Protocol != "tls" or details.Username != CROSSPLANE:
+        return False
+
+    allowed = False
+    kind, _, name = object.partition(":")
+
+    if object == "server:incus":
+        allowed = entitlement in SERVER_ENTITLEMENTS
+    elif kind == "storage_pool" and name == "remote":
+        allowed = entitlement == "can_view"
+    elif kind in TENANT_RIGHTS and name.startswith(TENANT_PREFIX):
+        allowed = entitlement in TENANT_RIGHTS[kind]
+
+    if not allowed and not (object == "server:incus" and entitlement in EXPECTED_REFUSALS):
+        log_warn("restricted client refused", object, entitlement)
+    return allowed

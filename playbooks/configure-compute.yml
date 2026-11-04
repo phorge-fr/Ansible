@@ -50,6 +50,85 @@
   # for this play.
   strategy: linear
   tasks:
+    # ---- Crossplane's client certificate and the scriptlet that limits it ----
+    # The certificate is trusted restricted, and the scriptlet is loaded BEFORE the shared-config loop below sets
+    # authorization.client.tls-restricted=scriptlet: a route to a driver that is not loaded refuses every request of
+    # that class. The scriptlet is the only thing that limits the certificate (a restricted certificate's project
+    # list is no longer consulted once the class is routed), so nothing in OpenFGA can widen it.
+    - name: Compute the fingerprint of Crossplane's client certificate  # noqa: run-once[task]
+      ansible.builtin.command: openssl x509 -noout -fingerprint -sha256
+      args:
+        stdin: "{{ incus_crossplane_client_certificate }}"
+      register: compute_crossplane_certificate
+      changed_when: false
+      run_once: true
+
+    - name: Check that the declared fingerprint is the one of the certificate  # noqa: run-once[task]
+      ansible.builtin.assert:
+        that:
+          - >-
+            (compute_crossplane_certificate.stdout | trim | regex_replace('^.*=', '') | replace(':', '') | lower)
+            == incus_crossplane_client_fingerprint
+        fail_msg: >-
+          incus_crossplane_client_fingerprint is not the SHA-256 fingerprint of incus_crossplane_client_certificate:
+          the scriptlet would authorize a certificate other than the one that is trusted.
+      run_once: true
+
+    - name: Read the client certificates the cluster trusts  # noqa: run-once[task]
+      ansible.builtin.command: incus config trust list --format json
+      register: compute_incus_trust
+      changed_when: false
+      run_once: true
+
+    - name: Refuse a copy of Crossplane's certificate that is trusted unrestricted  # noqa: run-once[task]
+      ansible.builtin.assert:
+        that:
+          - >-
+            compute_incus_trust.stdout | from_json
+            | selectattr('fingerprint', 'equalto', incus_crossplane_client_fingerprint)
+            | rejectattr('restricted') | list | length == 0
+        fail_msg: >-
+          Crossplane's certificate is trusted without --restricted. Remove it (incus config trust remove) and run
+          again, it would otherwise bypass the scriptlet.
+      run_once: true
+
+    - name: Trust Crossplane's client certificate, restricted  # noqa: run-once[task]
+      ansible.builtin.command:
+        argv:
+          - incus
+          - config
+          - trust
+          - add-certificate
+          - /dev/stdin
+          - --name
+          - "{{ incus_crossplane_client_name }}"
+          - --restricted
+        stdin: "{{ incus_crossplane_client_certificate }}"
+      when: >-
+        compute_incus_trust.stdout | from_json
+        | selectattr('fingerprint', 'equalto', incus_crossplane_client_fingerprint) | list | length == 0
+      changed_when: true
+      run_once: true
+
+    - name: Read the authorization scriptlet currently set  # noqa: run-once[task]
+      ansible.builtin.command: incus config get authorization.scriptlet
+      register: compute_incus_scriptlet_current
+      changed_when: false
+      run_once: true
+
+    # argv with the combined key=value, like the other config keys: the script holds double quotes, which the
+    # string form of the tasks below would split.
+    - name: Set the authorization scriptlet of the restricted clients  # noqa: run-once[task]
+      ansible.builtin.command:
+        argv:
+          - incus
+          - config
+          - set
+          - "authorization.scriptlet={{ incus_restricted_client_scriptlet }}"
+      when: (compute_incus_scriptlet_current.stdout | trim) != (incus_restricted_client_scriptlet | trim)
+      changed_when: true
+      run_once: true
+
     - name: Read the current value of each shared (cluster-wide) Incus config key  # noqa: run-once[task]
       ansible.builtin.command:
         argv:

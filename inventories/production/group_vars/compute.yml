@@ -150,6 +150,13 @@ incus_init_shared_config:
   # OpenFGA driver is loaded, a route to it resolves to "deny", so a fresh bootstrap fails closed. Unrestricted TLS
   # certificates and the unix socket keep their "allow" default (Ansible, admin scripts).
   authorization.client.oidc: openfga
+  # Restricted TLS certificates are authorized by the scriptlet of
+  # playbooks/files/incus-restricted-client-authorization.star.j2, loaded by
+  # configure-compute.yml BEFORE this key is applied (a route to a driver that
+  # is not loaded refuses every request of the class). The project list of a
+  # restricted certificate is no longer consulted once this is set: the
+  # scriptlet is what limits it.
+  authorization.client.tls-restricted: scriptlet
   logging.loki-frontplane.target.type: loki
   logging.loki-frontplane.target.address: "https://loki.core.phorge"  # confirmed real (FrontPlane's loki Ingress host)
   # Same identity as Alloy's own push (alloy_basic_auth_username/alloy_loki_basic_auth_password below): "iaas" used
@@ -301,6 +308,29 @@ alloy_loki_basic_auth_password: !vault |
           3136343135613634390a643963383266653133306630393338363138306537376438636136623635
           30346632633337353637393662343964646365363566666465316130353134656362366533313962
           3264373235396461303036323235666635376265303437333731
+
+# Client certificate of Crossplane's provider-incus (Hangar, Secret provider-incus-creds). Only the public part is
+# here; the private key never leaves that Secret. configure-compute.yml trusts it with --restricted and checks that
+# the fingerprint below is the one of the certificate. The fingerprint is what Incus calls the user of the
+# certificate (details.Username in the scriptlet of playbooks/files/incus-restricted-client-authorization.star.j2).
+# The Hangar how-to "Create a restricted Incus client certificate" explains how it is made and replaced.
+incus_crossplane_client_name: crossplane-provider-incus
+incus_crossplane_client_fingerprint: "552b869f06254c86937510db4c7287d36004c37ed20402644adc5483cf56dd4a"
+incus_restricted_client_scriptlet: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/files/incus-restricted-client-authorization.star.j2') }}"
+incus_crossplane_client_certificate: |
+  -----BEGIN CERTIFICATE-----
+  MIIB6jCCAXCgAwIBAgIUefYwmPjYrjfOSR7wFnwthEBfqlYwCgYIKoZIzj0EAwMw
+  LDEqMCgGA1UEAwwhY3Jvc3NwbGFuZS1wcm92aWRlci1pbmN1c0Bjb250cm9sMB4X
+  DTI2MTEwMzIyMjMzNFoXDTM2MTAzMTIyMjMzNFowLDEqMCgGA1UEAwwhY3Jvc3Nw
+  bGFuZS1wcm92aWRlci1pbmN1c0Bjb250cm9sMHYwEAYHKoZIzj0CAQYFK4EEACID
+  YgAEzPFVL7zFXejvPj1/FDM5hJOXr0gNPHwteimmCQ2uqaMwXDPubfw+XmJeCWEB
+  /Vul1zhIt7dbuVlA8dQC8cWkxQ3Qh11jBpODXK3plliBcSqmWWwaLqK7yL7Z/FB+
+  nAmPo1MwUTAdBgNVHQ4EFgQUw5Rw5deOBPi8xlMaMEvoCVTLzHYwHwYDVR0jBBgw
+  FoAUw5Rw5deOBPi8xlMaMEvoCVTLzHYwDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjO
+  PQQDAwNoADBlAjEA0iXCXD5of0LXgvwbbSr8X1tn5bmjquUAonFThqbBd0TAOBS5
+  wcNvmfZmDWVxpVLUAjA1NrfDMxChadJdU+YzYYCtQAT75VAVtpa5IhwlkHuHlutM
+  LWk+FKEWrN9lWDppsYE=
+  -----END CERTIFICATE-----
 
 # Ceph mgr options applied by configure-compute.yml (ceph config set mgr <key> <value>).
 # exclude_perf_counters is true by default because Ceph expects a ceph-exporter daemon

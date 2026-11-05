@@ -1,7 +1,7 @@
 ---
 type: reference
 audience: operator who looks up how the Incus cluster is laid out and configured
-verified: 2026-09-27
+verified: 2026-11-04
 ---
 
 # Incus cluster
@@ -21,8 +21,9 @@ It covers:
 - Redundant storage with real [Ceph](https://ceph.io/) (not MicroCeph - same
   daemons, no snapd): one OSD per node on the spare NVMe disk.
 - Cluster tuning, ACME (Let's Encrypt via Cloudflare DNS-01), OIDC, and Loki
-  logging via `incus config set` keys from `incus_init_shared_config`, and
-  OpenFGA authorization - all applied by `configure-compute.yml` (see
+  logging via `incus config set` keys from `incus_init_shared_config`,
+  OpenFGA authorization, and the scriptlet that limits Crossplane's restricted
+  client certificate - all applied by `configure-compute.yml` (see
   "Important: this is a one-shot bootstrap" below).
 
 Confirmed working end to end from a completely clean node (2026-09-23), with

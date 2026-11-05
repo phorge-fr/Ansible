@@ -1,7 +1,7 @@
 ---
 type: how-to
 audience: operator deploying or rolling back the Incus cluster
-verified: 2026-09-27
+verified: 2026-11-04
 ---
 
 # Deploy the Incus cluster
@@ -50,6 +50,16 @@ Runs `playbooks/setup-compute.yml`. How the cluster is laid out: [Incus cluster]
    `core.bgp_asn`); the per-node `core.bgp_address`/`core.bgp_routerid` come
    from `incus_init_node_config`.
 
+6. **Crossplane's client certificate** - done. `configure-compute.yml` trusts the public certificate of Crossplane's
+   `provider-incus` (`incus_crossplane_client_certificate`) with `--restricted`, loads the scriptlet
+   `playbooks/files/incus-restricted-client-authorization.star.j2` as `authorization.scriptlet`, and
+   `incus_init_shared_config` routes `authorization.client.tls-restricted` to it, in that order. The scriptlet lets this
+   certificate create projects and use the objects of the projects named `t-*`, and nothing else; any other restricted
+   certificate is refused. The rule lives inside Incus, so no OpenFGA tuple can widen it, while OIDC users still go
+   through OpenFGA. The private key stays in Hangar's Secret `provider-incus-creds`; Hangar's how-to "Create a
+   restricted Incus client certificate" explains how the certificate is made and replaced. To change the rule, edit
+   the scriptlet and run the playbook: a refused request is logged by the daemon as `restricted client refused`.
+
 Only the north-south NIC of `comp-opti-03` (no carrier when last checked) is still open. Everything else in
 `incus_init_shared_config` is applied and can be changed at any time with
 `configure-compute.yml`.
@@ -67,7 +77,7 @@ Only the north-south NIC of `comp-opti-03` (no carrier when last checked) is sti
    15-20 minutes for a fresh cluster (the known mon rescue alone can take
    most of that on this hardware).
 5. `ansible-playbook playbooks/configure-compute.yml`: applies the day-2 config (ACME, OIDC, Loki logging, OpenFGA
-   authorization), trusts core's CA and fixes the Ceph mgr modules, see the sections above.
+   authorization, Crossplane's restricted client certificate), trusts core's CA and fixes the Ceph mgr modules, see the sections above.
 6. Confirm: `incus cluster list` shows all three `ONLINE`, `ceph -s` shows 3 mons in quorum, 3 osds up/in and
    **`HEALTH_OK`** (a lingering `N mgr modules have failed dependencies` is the Debian 13 PyO3 problem described
    above: it means the mgr fix did not apply, not something to ignore), `ovn-sbctl show` lists three chassis, `incus

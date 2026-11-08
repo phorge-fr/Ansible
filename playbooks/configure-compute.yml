@@ -247,6 +247,33 @@
       no_log: true
       run_once: true
 
+    # Incus gives full access to any person its OIDC provider authenticates, unless an authorization method is set: with
+    # nothing routed, every account of Authentik is an administrator. authorization.client.oidc=openfga is that method
+    # (incus_init_shared_config, above). Nothing else stands in front of the application in Authentik, so this run fails
+    # rather than end with the route unset or the store missing.
+    - name: Read the authorization method that Incus uses for OIDC users  # noqa: run-once[task]
+      ansible.builtin.command: incus config get authorization.client.oidc
+      register: compute_incus_oidc_route
+      changed_when: false
+      run_once: true
+
+    - name: Read the OpenFGA store id set on Incus after the changes  # noqa: run-once[task]
+      ansible.builtin.command: incus config get authorization.openfga.store.id
+      register: compute_incus_openfga_final
+      changed_when: false
+      run_once: true
+
+    - name: Check that OIDC users are routed to OpenFGA, which holds a store  # noqa: run-once[task]
+      ansible.builtin.assert:
+        that:
+          - (compute_incus_oidc_route.stdout | trim) == 'openfga'
+          - (compute_incus_openfga_final.stdout | trim) == incus_openfga_store_id
+        fail_msg: >-
+          Incus does not send OIDC users to OpenFGA (authorization.client.oidc is '{{ compute_incus_oidc_route.stdout | trim }}',
+          the store id is '{{ compute_incus_openfga_final.stdout | trim }}'): every account of Authentik would be an
+          administrator of Incus. Set authorization.client.oidc=openfga and the OpenFGA store, then run again.
+      run_once: true
+
     # The admin tuples on server:incus are NOT written here. The store is the
     # one Crossplane's provider-openfga manages, so a tuple written from here
     # and a RelationshipTuple declared there would both claim ownership of
